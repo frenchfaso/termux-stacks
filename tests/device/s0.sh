@@ -190,13 +190,21 @@ if command -v readelf >/dev/null 2>&1; then
 		device_result binary.readelf-dynamic FAIL "$DEVICE_CAPTURE_RC" "readelf dynamic inspection failed" \
 			"$(device_capture_stdout_rel)" "$(device_capture_stderr_rel)"
 	fi
+	device_capture binary.readelf-symbols readelf -Ws "$binary_path"
+	if ((DEVICE_CAPTURE_RC == 0)) && grep -Eq '[[:space:]]flock(@[^[:space:]]+)?$' "$DEVICE_CAPTURE_STDOUT"; then
+		device_result binary.readelf-symbols PASS 0 "ELF imports bionic flock" \
+			"$(device_capture_stdout_rel)" "$(device_capture_stderr_rel)"
+	else
+		device_result binary.readelf-symbols FAIL "$DEVICE_CAPTURE_RC" "ELF does not import flock" \
+			"$(device_capture_stdout_rel)" "$(device_capture_stderr_rel)"
+	fi
 else
 	device_result binary.readelf-header SKIP - "readelf is not installed" - -
 	device_result binary.readelf-dynamic SKIP - "readelf is not installed" - -
+	device_result binary.readelf-symbols SKIP - "readelf is not installed" - -
 fi
 
-test_prefix=$DEVICE_WORK_DIR/prefix
-mkdir -m 0700 -- "$test_prefix"
+test_prefix=$DEVICE_RUNTIME_DIR
 device_metadata synthetic_prefix "$test_prefix"
 state_dir=$test_prefix/var/lib/termux-stacks
 run_dir=$test_prefix/var/run/termux-stacks
@@ -261,6 +269,21 @@ if start_daemon daemon.initial; then
 		device_result daemon.paths FAIL 1 "one or more synthetic PREFIX paths have wrong type or mode" - -
 	fi
 
+	if command -v flock >/dev/null 2>&1; then
+		device_capture daemon.lock-interop flock -n "$lock_path" true
+		if ((DEVICE_CAPTURE_RC != 0)); then
+			device_result daemon.lock-interop PASS "$DEVICE_CAPTURE_RC" \
+				"independent flock client observed the daemon lock" \
+				"$(device_capture_stdout_rel)" "$(device_capture_stderr_rel)"
+		else
+			device_result daemon.lock-interop FAIL 0 \
+				"independent flock client acquired the live daemon lock" \
+				"$(device_capture_stdout_rel)" "$(device_capture_stderr_rel)"
+		fi
+	else
+		device_result daemon.lock-interop SKIP - "flock is not installed" - -
+	fi
+
 	device_capture_timed 5 daemon.singleton env PREFIX="$test_prefix" "$binary_path" daemon
 	if ((DEVICE_CAPTURE_RC != 0 && DEVICE_CAPTURE_RC != 124)) && \
 		grep -q 'another daemon is already running' "$DEVICE_CAPTURE_STDERR"; then
@@ -300,6 +323,7 @@ else
 	device_result daemon.start FAIL "$start_rc" "daemon did not create a control socket" \
 		"$daemon_stdout_rel" "$daemon_stderr_rel"
 	device_result daemon.paths SKIP - "daemon start failed" - -
+	device_result daemon.lock-interop SKIP - "daemon start failed" - -
 	device_result daemon.singleton SKIP - "daemon start failed" - -
 	device_result daemon.term-recovery SKIP - "daemon start failed" - -
 	device_result daemon.kill-recovery SKIP - "daemon start failed" - -

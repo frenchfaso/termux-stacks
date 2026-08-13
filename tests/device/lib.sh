@@ -12,9 +12,11 @@ export LC_ALL=C
 export TZ=UTC
 umask 077
 
-DEVICE_HARNESS_VERSION=1
+DEVICE_HARNESS_VERSION=2
 DEVICE_RUN_DIR=
 DEVICE_WORK_DIR=
+DEVICE_RUNTIME_ROOT=
+DEVICE_RUNTIME_DIR=
 DEVICE_EVIDENCE_DIR=
 DEVICE_STDIO_DIR=
 DEVICE_METADATA_FILE=
@@ -45,6 +47,7 @@ device_require_result_id() {
 device_init() {
 	local output_root=${1-}
 	local canonical_root
+	local runtime_root
 
 	if [[ -z $output_root ]]; then
 		output_root=${TMPDIR:-}
@@ -79,6 +82,22 @@ device_init() {
 	DEVICE_RESULTS_FILE=$DEVICE_EVIDENCE_DIR/results.tsv
 
 	mkdir -m 0700 -- "$DEVICE_WORK_DIR" "$DEVICE_EVIDENCE_DIR" "$DEVICE_STDIO_DIR" || return 2
+
+	runtime_root=${TMPDIR:-$canonical_root}
+	if [[ $runtime_root != /* || ! -d $runtime_root || ! -w $runtime_root ]]; then
+		device_error "TMPDIR must be an absolute writable directory: $runtime_root"
+		return 2
+	fi
+	DEVICE_RUNTIME_ROOT=$(cd -- "$runtime_root" 2>/dev/null && pwd -P) || {
+		device_error "cannot resolve runtime root: $runtime_root"
+		return 2
+	}
+	DEVICE_RUNTIME_DIR=$(mktemp -d "$DEVICE_RUNTIME_ROOT/txs-s0.XXXXXXXX") || {
+		device_error "cannot create short runtime directory under $DEVICE_RUNTIME_ROOT"
+		return 2
+	}
+	chmod 0700 "$DEVICE_RUNTIME_DIR" || return 2
+
 	printf 'key\tvalue\n' >"$DEVICE_METADATA_FILE"
 	printf 'test_id\tstatus\texit_code\tdetail\tstdout\tstderr\n' >"$DEVICE_RESULTS_FILE"
 	device_metadata harness_version "$DEVICE_HARNESS_VERSION"
@@ -226,6 +245,14 @@ device_cleanup() {
 		-d $DEVICE_WORK_DIR ]]; then
 		rm -rf -- "$DEVICE_WORK_DIR"
 	fi
+
+	case ${DEVICE_RUNTIME_DIR:-} in
+		"${DEVICE_RUNTIME_ROOT:-}"/txs-s0.*)
+			if [[ -d $DEVICE_RUNTIME_DIR && ! -L $DEVICE_RUNTIME_DIR ]]; then
+				rm -rf -- "$DEVICE_RUNTIME_DIR"
+			fi
+			;;
+	esac
 }
 
 device_finish() {
