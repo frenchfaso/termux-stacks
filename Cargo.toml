@@ -10,6 +10,9 @@ repository = "https://github.com/frenchfaso/termux-stacks"
 homepage = "https://github.com/frenchfaso/termux-stacks"
 readme = "README.md"
 
+[dependencies]
+libc = { version = "0.2.189", default-features = false }
+
 [[bin]]
 name = "termux-stacks"
 path = "src/main.rs"

@@ -1,7 +1,8 @@
 use crate::paths::RuntimePaths;
 use std::fmt;
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -109,10 +110,28 @@ impl DaemonLock {
             return Err(Error::UnsafeLockPath(path.to_path_buf()));
         }
 
-        match file.try_lock() {
-            Ok(()) => Ok(Self { _file: file }),
-            Err(TryLockError::WouldBlock) => Err(Error::AlreadyRunning),
-            Err(TryLockError::Error(error)) => Err(Error::LockDaemon(error)),
+        match try_lock_exclusive(&file) {
+            Ok(true) => Ok(Self { _file: file }),
+            Ok(false) => Err(Error::AlreadyRunning),
+            Err(error) => Err(Error::LockDaemon(error)),
+        }
+    }
+}
+
+fn try_lock_exclusive(file: &File) -> io::Result<bool> {
+    loop {
+        // SAFETY: `file` owns a valid descriptor for the duration of the call,
+        // and `flock` neither retains the descriptor nor dereferences pointers.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(true);
+        }
+
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock => return Ok(false),
+            _ => return Err(error),
         }
     }
 }
