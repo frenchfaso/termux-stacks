@@ -121,11 +121,19 @@ pub(crate) fn test_prefix(label: &str) -> PathBuf {
         .len()
         > 90
     {
+        #[cfg(target_os = "android")]
+        {
+            let compact = format!("txs-{:x}-{unique:x}", std::process::id());
+            prefix = std::env::temp_dir().join(compact);
+        }
         #[cfg(target_os = "macos")]
         let short_temp = Path::new("/private/tmp");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
         let short_temp = Path::new("/tmp");
-        prefix = short_temp.join(name);
+        #[cfg(not(target_os = "android"))]
+        {
+            prefix = short_temp.join(name);
+        }
     }
     fs::create_dir(&prefix).expect("create test prefix");
     prefix
