@@ -124,6 +124,6 @@ Termux Stacks è un progetto indipendente della comunità e non è approvato o
 supportato dai maintainer di Termux. Prima della prima release pubblica va
 chiesto un riscontro sull'uso di “Termux” nel nome.
 
-Il progetto è distribuito sotto **Apache License 2.0**. La licenza riguarda
-Termux Stacks; `proot-distro`, Termux e le altre dipendenze conservano le
-rispettive licenze.
+Il progetto è distribuito sotto [Apache License 2.0](LICENSE). La licenza
+riguarda Termux Stacks; `proot-distro`, Termux e le altre dipendenze
+conservano le rispettive licenze.

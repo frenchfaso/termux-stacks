@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.93
+        run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
+
+      - name: Check formatting
+        run: cargo +1.93.0 fmt --all -- --check
+
+      - name: Lint
+        run: cargo +1.93.0 clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo +1.93.0 test --locked
+
+      - name: Build release binary
+        run: cargo +1.93.0 build --release --locked

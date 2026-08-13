@@ -6,6 +6,9 @@ rust-version = "1.93"
 publish = false
 description = "Declarative service stacks for Termux using PRoot"
 license = "Apache-2.0"
+repository = "https://github.com/frenchfaso/termux-stacks"
+homepage = "https://github.com/frenchfaso/termux-stacks"
+readme = "README.md"
 
 [[bin]]
 name = "termux-stacks"

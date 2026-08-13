@@ -79,12 +79,12 @@ vendoring deliberato.
 Scheletro da completare dopo tag, licenza e spike delle dipendenze:
 
 ```bash
-TERMUX_PKG_HOMEPAGE=https://example.invalid/termux-stacks
+TERMUX_PKG_HOMEPAGE=https://github.com/frenchfaso/termux-stacks
 TERMUX_PKG_DESCRIPTION="Declarative service stacks for Termux using PRoot"
 TERMUX_PKG_LICENSE="Apache-2.0"
-TERMUX_PKG_MAINTAINER="<maintainer>"
+TERMUX_PKG_MAINTAINER="@frenchfaso"
 TERMUX_PKG_VERSION="<version>"
-TERMUX_PKG_SRCURL="https://example.invalid/termux-stacks/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
+TERMUX_PKG_SRCURL="https://github.com/frenchfaso/termux-stacks/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256="<sha256>"
 TERMUX_PKG_DEPENDS="proot-distro (>= 5.6.0), termux-services"
 TERMUX_PKG_BUILD_IN_SRC=true
@@ -99,7 +99,7 @@ termux_step_pre_configure() {
 
 Note:
 
-- homepage, checksum e maintainer sono placeholder invalidi;
+- versione/tag e checksum sono placeholder finché non esiste una release;
 - se SQLite usa la libreria di sistema, aggiungere `libsqlite` alle
   dipendenze e verificare l'ELF; non basta dichiararla;
 - se una crate abilita SQLite bundled, la decisione richiede ADR e audit CVE;

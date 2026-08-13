@@ -5,9 +5,10 @@
 **Implementazione:** Rust, un package/crate, un binario
 
 **Avanzamento:** checkpoint host S0 verde: scaffold, CLI minima, daemon stub,
-path privati, lock singleton, build release, Clippy e 9 unit test. La fixture
-è ancora un template con placeholder; package build e prova aarch64 restano
-aperti.
+path privati, lock singleton, build release, Clippy, 9 unit test e 5 test
+black-box del vero ELF. È presente un harness device S0 non distruttivo. La
+fixture è ancora un template con checksum placeholder; package build e prova
+aarch64 restano aperti.
 
 ## 1. Verdetto architetturale
 
@@ -163,14 +164,16 @@ Test:
 - registrazione con directory non scrivibile;
 - `flock` non disponibile o fallito, se riproducibile;
 - registro troncato e output inatteso;
-- daemon che muore mentre la sessione resta viva.
+- parent harness che muore mentre la sessione resta viva.
 
 L'harness deve osservare process tree host indipendentemente da `pd ps` per
-individuare falsi negativi.
+individuare falsi negativi. Ogni caso conserva output raw, exit status e
+osservazione indipendente in un corpus; una rappresentazione golden annota il
+significato atteso senza introdurre ancora codice di parsing production.
 
 Exit:
 
-- parser versionato con fixture;
+- corpus raw + golden sufficiente a implementare e regredire il parser in S5;
 - condizione precisa in cui un risultato empty può essere considerato forte;
 - decisione: auto-recovery abilitata, oppure stato `unknown` con diagnostica
   e intervento manuale.
@@ -188,7 +191,11 @@ Workload:
 - processo che ignora TERM;
 - figlio e nipote;
 - processo che cambia sessione/process group;
-- daemon Termux Stacks terminato con SIGTERM e SIGKILL.
+- parent harness terminato con SIGTERM e SIGKILL mentre il workload resta
+  attivo.
+
+S3 non richiede il daemon Termux Stacks. La strategia scelta viene ripetuta
+sotto il daemon reale in S5, dove entrano in gioco supervisione e recovery.
 
 Confrontare:
 
@@ -210,23 +217,27 @@ Exit:
 
 ## 9. Fase S4 — Ownership e crash durante install
 
-**Obiettivo:** rendere sicuro il confine non atomico SQLite/engine.
+**Obiettivo:** classificare ciò che lascia un `proot-distro install`
+interrotto, prima di progettare il confine SQLite/engine.
 
-Il test interrompe il demone:
+Il test usa soltanto la CLI pubblica dell'engine e alias disposable, casuali e
+mai riutilizzati. Interrompe `proot-distro install` in finestre controllate
+durante download ed estrazione, quindi classifica l'alias risultante:
 
-- prima di invocare install;
-- durante download/estrazione;
-- dopo il successo engine ma prima dell'outcome SQLite;
-- prima e dopo start;
-- prima del commit revisione.
+- `absent`: l'alias non è osservabile;
+- `owned`: l'alias disposable è osservabile e attribuibile a quel tentativo;
+- `ambiguous`: le interfacce pubbliche non bastano a provare uno dei due casi.
 
-Per ogni punto classifica database, alias, rootfs, sessione e file log. Gli
-alias sono casuali e non riutilizzabili; l'intent deve precedere lo spawn.
+S4 non introduce SQLite, daemon, start del workload o commit di revisione. Il
+test non usa né modifica alias preesistenti. Intent persistito e fault point
+transazionali vengono applicati nel vertical slice S5 usando questa tabella di
+esiti.
 
 Exit:
 
-- recovery deterministica dell'artefatto per `absent` e `owned`;
-- `ambiguous` non viene cancellato né avviato automaticamente;
+- tabella raw + golden degli esiti `absent | owned | ambiguous`;
+- strategia deterministica futura per `absent` e `owned`;
+- `ambiguous` definito fail-closed: nessuna cancellazione o avvio automatico;
 - nessun test richiede accesso agli internals di `proot-distro`;
 - procedura manuale per gli artefatti dubbi.
 
@@ -237,6 +248,7 @@ Exit:
 Deliverable:
 
 - parser strict del profilo vertical slice;
+- parser production dell'output engine derivato dal corpus raw + golden S2;
 - daemon singleton tramite lock advisory e socket locale;
 - protocollo request/response a versione esatta;
 - SQLite `meta/stacks/services/operations`;
@@ -244,6 +256,7 @@ Deliverable:
 - install rootfs, run foreground, log ed exit;
 - reconciliation definita dagli esiti S2–S4;
 - fake engine per test host e adapter reale su device;
+- ripetizione sotto il daemon reale dei test signal/tree-kill scelti in S3;
 - upgrade del binario mentre il daemon precedente è vivo: protocol mismatch
   diagnosticato senza proseguire.
 
@@ -285,11 +298,12 @@ domanda utente o di recovery concreta.
 
 ## 12. CI proporzionata
 
-Durante S0–S5:
+Controlli proporzionati per fase:
 
 | Trigger | Controlli |
 |---|---|
-| ogni change | fmt, Clippy, unit, parser fixture, fake-engine contract |
+| ogni change, S0–S4 | fmt, Clippy, unit e validazione di harness/corpus spike |
+| ogni change, da S5 | controlli precedenti, parser fixture e fake-engine contract |
 | main/dipendenze | test integrazione host e build source archive |
 | nightly o crate native | package build sulle 4 architetture Termux |
 | manuale | smoke e fault test su un device aarch64 |
