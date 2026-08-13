@@ -11,10 +11,11 @@ realmente read-only o isolamento fra workload ostili.
 
 ## Stato
 
-Il bootstrap **S0 è iniziato**. Esistono il package Rust senza dipendenze,
-`--help`, `--version`, uno stub `daemon` foreground e il template della
-fixture Termux. Il checkpoint host passa; package e servizio non sono ancora
-stati provati su Android.
+Il bootstrap **S0 è completato su aarch64**. CI host, package Android e
+servizio runit sono verdi; l'harness device v2 ha chiuso con 24 PASS, 0 FAIL
+e 0 SKIP. Il ciclo stateful ha verificato enable/start, singleton, recupero
+dello socket stale, restart dopo SIGKILL e disable finale. Il record
+riproducibile è in [docs/evidence/S0.md](docs/evidence/S0.md).
 Non esiste ancora un runtime utilizzabile: lifecycle PRoot e recovery devono
 essere verificati su un dispositivo Android reale prima di ampliare le
 funzionalità.

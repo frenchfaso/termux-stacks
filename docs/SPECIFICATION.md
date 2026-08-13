@@ -1,6 +1,6 @@
 # Specifica del prodotto Termux Stacks
 
-**Stato:** proposta v0.1; bootstrap S0 in corso
+**Stato:** proposta v0.1; bootstrap S0 completato, spike S1–S4 aperti
 **Target:** Termux su Android senza root
 **Autorità:** comportamento pubblico del prodotto
 

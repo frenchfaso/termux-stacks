@@ -4,11 +4,12 @@
 **Strategia:** spike prima, vertical slice, poi MVP
 **Implementazione:** Rust, un package/crate, un binario
 
-**Avanzamento:** checkpoint host S0 verde: scaffold, CLI minima, daemon stub,
-path privati, lock singleton, build release, Clippy, 9 unit test e 5 test
-black-box del vero ELF. È presente un harness device S0 non distruttivo. La
-fixture è ancora un template con checksum placeholder; package build e prova
-aarch64 restano aperti.
+**Avanzamento:** S0 completata il 2026-08-14. Scaffold, CLI minima, daemon
+stub, path privati, lock singleton, CI host, package aarch64 e integrazione
+runit sono verdi. L'harness device v2 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
+il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
+[evidence/S0.md](evidence/S0.md). La fixture resta intenzionalmente un template
+pre-release: tag pubblico e checksum del tarball GitHub appartengono a G3.
 
 ## 1. Verdetto architetturale
 
@@ -99,7 +100,7 @@ Non si crea un workspace multi-crate né `xtask`. Un modulo viene estratto
 solo quando possiede un confine compilabile e testabile che riduce realmente
 accoppiamento o `unsafe`.
 
-## 5. Fase S0 — Bootstrap Rust e package
+## 5. Fase S0 — Bootstrap Rust e package — completata
 
 **Obiettivo:** dimostrare che il più piccolo artefatto corretto vive in
 Termux.
@@ -110,8 +111,9 @@ Deliverable:
 - `Cargo.lock` versionato;
 - CLI con `--version`, `--help` e subcommand interno `daemon`;
 - path risolti da `PREFIX`, mai hardcoded su `/usr` o `/run`;
-- fixture Termux materializzata con release, checksum e licenza, che
-  costruisce e installa un solo ELF;
+- fixture Termux esercitata da un package build aarch64, con revisione
+  sorgente, checksum e licenza registrati, che costruisce e installa un solo
+  ELF; release pubblica e checksum del relativo tarball sono differiti a G3;
 - service script `termux-stacksd` foreground con stderr su stdout;
 - file `down` e nessuna abilitazione automatica.
 
@@ -125,10 +127,10 @@ Test:
 Exit:
 
 - package e servizio funzionano su un device aarch64;
-- nessun download di dipendenze/toolchain Rust durante installazione,
-  avvio o runtime; l'acquisizione esplicita di immagini tramite `up` è
-  traffico applicativo previsto;
-- dimensione ELF, package e dependency tree sono registrate.
+- nessun maintainer script o binario scarica crate, Cargo, rustup o toolchain
+  durante installazione, avvio o runtime; il package manager può risolvere le
+  dipendenze dichiarate e `up` potrà acquisire esplicitamente immagini;
+- dimensione ELF, package e dipendenze Cargo/runtime sono registrate.
 
 ## 6. Fase S1 — Contratto command
 

@@ -200,6 +200,12 @@ Su almeno un device aarch64:
 6. provare kill -9, disk full controllato e recovery;
 7. verificare remove con servizio enabled/disabled e che i dati sopravvivano.
 
+Per il solo gate S0 è documentato un fallback nativo minimale in
+[`packaging/termux/README.md`](../packaging/termux/README.md). Salta la
+risoluzione delle dipendenze soltanto dopo un preflight esplicito e usa un
+collector allowlist, perché il builder on-device opera sul vero `$PREFIX`.
+Non sostituisce la build off-device richiesta per release e proposta ufficiale.
+
 Reboot, Doze, force-stop e più device diventano gate RC, non del primo
 binario.
 

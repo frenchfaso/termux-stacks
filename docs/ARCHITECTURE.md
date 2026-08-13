@@ -1,6 +1,6 @@
 # Architettura di Termux Stacks
 
-**Stato:** proposta v0.1; bootstrap S0 in corso
+**Stato:** proposta v0.1; bootstrap S0 completato, spike S1–S4 aperti
 **Target:** Termux/Android senza root
 **Baseline da verificare:** `proot-distro 5.6.0`
 **Autorità:** componenti interni, persistenza e recovery
