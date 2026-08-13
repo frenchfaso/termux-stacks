@@ -86,7 +86,7 @@ TERMUX_PKG_MAINTAINER="@frenchfaso"
 TERMUX_PKG_VERSION="<version>"
 TERMUX_PKG_SRCURL="https://github.com/frenchfaso/termux-stacks/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256="<sha256>"
-TERMUX_PKG_DEPENDS="proot-distro (>= 5.6.0), termux-services"
+TERMUX_PKG_DEPENDS="termux-services"
 TERMUX_PKG_BUILD_IN_SRC=true
 TERMUX_PKG_SERVICE_SCRIPT=(
   "termux-stacksd" 'exec "$PREFIX/bin/termux-stacks" daemon 2>&1'
@@ -100,6 +100,8 @@ termux_step_pre_configure() {
 Note:
 
 - versione/tag e checksum sono placeholder finché non esiste una release;
+- lo scaffold S0 dipende solo da `termux-services`; aggiungere
+  `proot-distro (>= 5.6.0)` quando entra l'adapter engine in S5, non prima;
 - se SQLite usa la libreria di sistema, aggiungere `libsqlite` alle
   dipendenze e verificare l'ELF; non basta dichiararla;
 - se una crate abilita SQLite bundled, la decisione richiede ADR e audit CVE;
