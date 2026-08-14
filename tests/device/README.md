@@ -186,3 +186,74 @@ PGIDs/SIDs are empty. In an ambiguous case, the harness waits for the TTL,
 fails, and preserves the sandbox; it never broadens the cleanup target. Guest
 events and identities are copied into the evidence before the rootfs is
 removed.
+
+## S4 — Interrupted install ownership
+
+S4 requires the S2/S3 engine baseline, Python, and a reviewed external arm64
+OCI archive built from `fixtures/s4/Containerfile`. The second layer contains
+50,000 empty files: it remains small when compressed and makes the interval
+after the public `Applying layer 2/2` marker observable on the device.
+
+After placing the digest-pinned Alpine base in the local image cache, build
+and save the fixture off-device with arm64 Podman/Buildah:
+
+```bash
+podman build --platform linux/arm64 --format oci --pull=never \
+  --network=none --no-cache --layers=false --timestamp 0 \
+  --tag localhost/termux-stacks-s4-fixture:v1 \
+  --file tests/device/fixtures/s4/Containerfile \
+  tests/device/fixtures/s4
+podman save --format oci-archive \
+  --output termux-stacks-s4-fixture-linux-arm64.oci.tar \
+  localhost/termux-stacks-s4-fixture:v1
+sha256sum termux-stacks-s4-fixture-linux-arm64.oci.tar
+tar -xOf termux-stacks-s4-fixture-linux-arm64.oci.tar index.json \
+  | jq -r '.manifests[0].digest'
+```
+
+The reviewed v1 manifest digest is pinned by
+`BLESSED_MANIFEST_SHA256` in `fixtures/s4/verify-oci.sh`. Any fixture rebuild
+must be reviewed and must update that trust root before an acceptance run.
+The external archive remains outside the repository and is supplied with its
+exact SHA-256:
+
+```bash
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/s4.sh \
+  --archive "$HOME/termux-stacks-s4-fixture-linux-arm64.oci.tar" \
+  --archive-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+S4 rejects output roots outside Termux's canonical app-private `files`
+directory. The default acceptance matrix is C0, three F1 cycles, and three F2
+cycles:
+
+1. C0 completes a local OCI install and qualifies the positive observer;
+2. F1 kills the exact installer scope after a loopback server has sent and
+   fsynced its first-chunk download barrier;
+3. F2 stops and kills the exact installer scope after unbuffered public stderr
+   announces application of OCI layer 2/2 and before any later public phase
+   marker appears.
+
+`--fault-cycles 1..10` is available for diagnostics; the default is three.
+Every attempt uses a fresh synthetic `TERMUX__PREFIX`, a random alias from
+`/dev/urandom`, a durable intent entry, and a qualified boot-ID/PID/start-time/
+PGID/SID scope. The harness never mutates the real runtime, reuses an alias,
+or uses `--all`, `reset`, `clear-cache`, a glob, or a pre-existing target.
+
+After invocation, `owned` requires two successful, stderr-free public
+`list --quiet` observations containing exactly the one expected alias. An
+empty list is never interpreted as `absent`; any failed, empty, changing, or
+malformed observation is `ambiguous`. Only `owned` permits an exact public
+`remove ALIAS`, followed by two empty public inventories and deletion of the
+pinned private sandbox. `ambiguous` fails the run and preserves the sandbox.
+
+The evidence bundle includes raw installer/server/list output, an fsynced
+intent ledger, process identities, `golden.tsv`, and `preserved.tsv`. For a
+questionable artifact, do not rerun the alias and do not broaden the target.
+Archive the evidence, confirm that every recorded process scope drained, and
+review the two raw public observations. If ownership still cannot be proven,
+retain the synthetic sandbox; a reviewer may later remove that exact private
+sandbox only after independently checking its sentinel and that no recorded
+scope remains. S4 has no SQLite, daemon, workload, or production parser.

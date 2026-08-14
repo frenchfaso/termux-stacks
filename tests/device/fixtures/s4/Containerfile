@@ -1,0 +1,14 @@
+FROM docker.io/library/alpine@sha256:e7a1a92a5bfeee40966aea60f0796b0e7917cc35591542701834f03a68fa3d18
+
+# Empty files keep the compressed fixture small while making application of
+# the second OCI layer long enough to stop at proot-distro's public barrier.
+RUN set -eu; \
+	mkdir -p /s4-slow; \
+	i=0; \
+	while [ "$i" -lt 50000 ]; do \
+		: >"/s4-slow/entry-$i"; \
+		i=$((i + 1)); \
+	done; \
+	printf '%s\n' 'termux-stacks-s4-v1' >/s4-fixture
+
+ENTRYPOINT ["/bin/true"]

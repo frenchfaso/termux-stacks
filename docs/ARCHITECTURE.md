@@ -1,6 +1,6 @@
 # Termux Stacks Architecture
 
-**Status:** v0.1 proposal; S0–S3 completed, S4 spike open
+**Status:** v0.1 proposal; S0–S4 completed, S5 vertical slice open
 **Target:** Termux/Android without root access
 **Verified engine baseline:** `proot-distro 5.6.0`
 **Authority:** internal components, persistence, and recovery
@@ -272,8 +272,12 @@ restart reuses the registered rootfs.
 5. observe success and register the rootfs.
 
 A crash between steps 3 and 5 leaves an incomplete operation. Recovery
-classifies the artifact as `absent | owned | ambiguous` and does not delete it
-in the third case.
+classifies the artifact as `absent | owned | ambiguous`. `Absent` requires
+durable proof that the engine invocation could not have begun; a negative
+engine inventory after invocation is possible is only `ambiguous`. An
+`owned` partial artifact is never started or reused and may be removed only by
+its exact full alias. An `ambiguous` artifact is preserved for diagnosis and
+is not deleted, retried, or started automatically.
 
 ### Start
 

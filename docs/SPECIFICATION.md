@@ -1,6 +1,6 @@
 # Termux Stacks Product Specification
 
-**Status:** v0.1 proposal; S0–S3 completed, S4 spike open
+**Status:** v0.1 proposal; S0–S4 completed, S5 vertical slice open
 **Target:** Termux on unrooted Android
 **Authority:** public product behavior
 

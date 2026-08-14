@@ -27,8 +27,11 @@ fail-closed policy; its record is in
 stop strategy uses only the exact session identifier and drained cooperative
 trees, TERM-ignoring trees, a descendant in a new session, and guests left
 behind after the PRoot tracer died, plus 100 consecutive cycles. Its record is
-in [docs/evidence/S3.md](docs/evidence/S3.md). There is no usable runtime yet:
-install-time ownership must pass S4 before the S5 vertical slice begins.
+in [docs/evidence/S3.md](docs/evidence/S3.md). **S4 is complete**: 16 PASS
+checks qualified completed installs and three crashes in each acquisition
+window, freezing a fail-closed ownership policy. Its record is in
+[docs/evidence/S4.md](docs/evidence/S4.md). There is no usable runtime yet;
+the S5 vertical slice is the next implementation milestone.
 
 Only the essential architectural decisions are frozen:
 

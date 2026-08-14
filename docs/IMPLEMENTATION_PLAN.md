@@ -4,7 +4,7 @@
 **Strategy:** spikes first, vertical slice, then MVP
 **Implementation:** Rust, one package/crate, one binary
 
-**Progress:** S0–S3 completed on 2026-08-14. The scaffold, minimal CLI, daemon
+**Progress:** S0–S4 completed on 2026-08-14. The scaffold, minimal CLI, daemon
 stub, private paths, singleton lock, host CI, aarch64 package, and runit
 integration are green. The v3 device harness completed with 24 PASS, 0 FAIL,
 and 0 SKIP; the stateful runit cycle is PASS. Evidence and limitations are
@@ -15,9 +15,12 @@ reproduced three false negatives in the session registry with 16 PASS, 0 FAIL,
 and 0 SKIP, requiring `unknown` after the child handle is lost. S3 qualified
 exact-session kill and 100 drain cycles with 15 PASS, 0 FAIL, and 0 SKIP. The
 records are [evidence/S1.md](evidence/S1.md),
-[evidence/S2.md](evidence/S2.md), and [evidence/S3.md](evidence/S3.md). The
-package fixture intentionally remains a pre-release template: the public tag
-and GitHub tarball checksum belong to G3.
+[evidence/S2.md](evidence/S2.md), and [evidence/S3.md](evidence/S3.md). S4
+qualified interrupted-install ownership with 16 PASS, 0 FAIL, and 0 SKIP:
+positive public observations can establish `owned`, while a negative public
+inventory after invocation may have begun is always `ambiguous`. Its record is
+[evidence/S4.md](evidence/S4.md). The package fixture intentionally remains a
+pre-release template: the public tag and GitHub tarball checksum belong to G3.
 
 ## 1. Architecture verdict
 
@@ -232,31 +235,49 @@ Verified exit:
 - no observable guest in 100 cycles; C3 leaves the second session with the
   same alias intact.
 
-## 9. Phase S4 — Ownership and crash during install
+## 9. Phase S4 — Ownership and crash during install — completed
 
 **Objective:** classify what an interrupted `proot-distro install` leaves
 behind before designing the SQLite/engine boundary.
 
 The test uses only the engine's public CLI and disposable, random aliases that
-are never reused. It interrupts `proot-distro install` in controlled windows
-during download and extraction, then classifies the resulting alias:
+are never reused. Its minimal matrix is one completed local OCI install, one
+identity-qualified crash behind a loopback download barrier, and one
+identity-qualified crash after the public layer-application phase marker.
+Each interrupted window is repeated a small, bounded number of times. The
+resulting alias is classified as:
 
-- `absent`: the alias is not observable;
+- `absent`: durable phase ordering proves that the engine invocation could not
+  have begun;
 - `owned`: the disposable alias is observable and attributable to that attempt;
 - `ambiguous`: the public interfaces are insufficient to prove either case.
+
+`proot-distro 5.6.0` publishes the alias before download or extraction, and
+its public container inventory can turn an enumeration error into an empty
+result. S4 therefore never infers `absent` from a negative inventory after an
+invocation may have begun. Such a result is `ambiguous`; durable phase proof
+for `absent` is introduced with the persisted operation in S5.
 
 S4 does not introduce SQLite, a daemon, workload startup, or revision commit.
 The test neither uses nor modifies pre-existing aliases. Persisted intent and
 transactional fault points are applied in the S5 vertical slice using this
 outcome table.
 
-Exit criteria:
+Verified exit:
 
-- raw + golden table of `absent | owned | ambiguous` outcomes;
-- a future deterministic strategy for `absent` and `owned`;
+- raw + golden evidence for a completed install and two bounded interrupted
+  windows, with each fault repeated three times;
+- all seven attempts classified `owned` by two exact positive public
+  observations, then removed by exact alias without residue;
+- deterministic recovery rules for `absent`, `owned`, and `ambiguous`;
 - `ambiguous` defined as fail-closed: no automatic deletion or startup;
 - no test requires access to `proot-distro` internals;
 - a manual procedure for questionable artifacts.
+
+The aarch64 acceptance run completed with **16 PASS, 0 FAIL, and 0 SKIP**.
+It left no test alias, process scope, synthetic rootfs, or change to the real
+engine runtime. The complete matrix, artifact hashes, classifier, limitations,
+and raw-bundle checksum are recorded in [evidence/S4.md](evidence/S4.md).
 
 ## 10. Phase S5 — Vertical slice
 
@@ -323,7 +344,7 @@ Checks proportionate to each phase:
 
 | Trigger | Checks |
 |---|---|
-| every change, S0–S4 | fmt, Clippy, unit tests, and validation of spike harnesses/corpora |
+| every change, S0–S4 | fmt, Clippy, unit tests, and syntax checks for spike harnesses and fixtures |
 | every change, from S5 | previous checks, parser fixtures, and fake-engine contract |
 | main/dependencies | host integration tests and source-archive build |
 | nightly or native crate | package build on all 4 Termux architectures |
