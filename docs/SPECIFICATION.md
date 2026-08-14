@@ -1,6 +1,6 @@
 # Specifica del prodotto Termux Stacks
 
-**Stato:** proposta v0.1; S0 e S1 completati, spike S2–S4 aperti
+**Stato:** proposta v0.1; S0–S2 completati, spike S3–S4 aperti
 **Target:** Termux su Android senza root
 **Autorità:** comportamento pubblico del prodotto
 
@@ -133,6 +133,11 @@ Il runtime DEVE mantenere:
 11. persistenza garantita solo per volumi e bind dichiarati;
 12. nessuna API viene descritta come secret-safe se può esporre il valore.
 
+Per la baseline `proot-distro 5.6.0`, un `ps --quiet` vuoto con exit 0 non è
+prova d'assenza. Nel demone corrente l'exit del child posseduto è evidenza
+forte; dopo la perdita dell'handle, un registry empty, illeggibile o malformed
+porta a `unknown` e non autorizza un effetto automatico.
+
 ## 6. Lifecycle
 
 ### up
@@ -185,8 +190,9 @@ attiva; `running` se tutti i servizi richiesti sono running; `failed` se
 un servizio richiesto ha esaurito la restart policy; `starting` negli altri
 casi di convergenza.
 
-`absent` indica che non esiste un rootfs registrato; `stopped` che il
-rootfs esiste ma il processo non è attivo.
+`absent` indica che non esiste un rootfs registrato; `stopped` che il rootfs
+esiste e il demone corrente ha osservato l'exit del processo posseduto. Un
+registry semplicemente vuoto dopo cold start non basta a derivare `stopped`.
 
 `running` significa che il processo principale è osservato, non che
 l'applicazione sia pronta. Una porta dichiarata può essere controllata per

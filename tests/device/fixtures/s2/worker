@@ -1,0 +1,57 @@
+#!/bin/sh
+
+set -u
+
+control_dir=${TSTACK_S2_CONTROL:-/control}
+token=${TSTACK_S2_TOKEN:-}
+ttl=${TSTACK_S2_TTL:-60}
+
+case $token in
+	'' | *[!a-z0-9-]*) exit 125 ;;
+esac
+case $ttl in
+	'' | *[!0-9]*) exit 125 ;;
+esac
+if [ "$ttl" -lt 1 ] || [ "$ttl" -gt 120 ]; then
+	exit 125
+fi
+if [ ! -d "$control_dir" ] || [ ! -w "$control_dir" ]; then
+	exit 125
+fi
+
+umask 077
+events=$control_dir/$token.events
+ready=$control_dir/$token.ready
+ready_tmp=$control_dir/.$token.ready.$$
+stop=$control_dir/$token.stop
+
+finish() {
+	reason=$1
+	code=$2
+	printf '%s\t%s\n' "$reason" "$(monotonic_seconds)" >>"$events"
+	rm -f -- "$ready_tmp"
+	exit "$code"
+}
+
+monotonic_seconds() {
+	value=$(cat /proc/uptime) || exit 125
+	value=${value%% *}
+	printf '%s\n' "${value%%.*}"
+}
+
+trap 'finish SIGNAL 0' HUP INT TERM
+
+printf 'START\t%s\n' "$(monotonic_seconds)" >>"$events"
+printf 'ready\n' >"$ready_tmp"
+mv -f -- "$ready_tmp" "$ready"
+
+deadline=$(($(monotonic_seconds) + ttl))
+while :; do
+	if [ -f "$stop" ]; then
+		finish STOP 0
+	fi
+	if [ "$(monotonic_seconds)" -ge "$deadline" ]; then
+		finish TTL 124
+	fi
+	sleep 0.1
+done

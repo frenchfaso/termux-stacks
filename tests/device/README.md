@@ -110,3 +110,45 @@ La matrice verifica default e override per i quattro shape, argv problematici
 in forma esadecimale, working directory, environment, exit status e il confine
 shell di `login`. Non prova registry delle sessioni o segnali: appartengono a
 S2 e S3.
+
+## S2 — Session registry
+
+S2 richiede un device Termux aarch64 con `proot-distro 5.6.0`, Bash, `jq`,
+`flock`, `setsid` e i normali coreutils. Riceve un OCI archive esterno e il
+suo SHA-256; prima dell'install verifica archive, manifest, config e ogni
+layer, inclusi piattaforma `linux/arm64` ed Entrypoint `/s2-worker`:
+
+```bash
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/s2.sh \
+  --archive "$HOME/termux-stacks-s2-worker-linux-arm64.oci.tar" \
+  --archive-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+La fixture si costruisce off-device con Podman/Buildah arm64. Il
+`Containerfile` fissa la base Alpine per digest; l'archive benedetto viene
+prodotto con `podman save --format oci-archive` e resta fuori dal repository.
+Il checksum qualifica quell'artefatto, non promette un tar byte-identico fra
+versioni diverse di Podman.
+
+Tutte le mutazioni engine usano `TERMUX__PREFIX` e `TERMUX__HOME` sintetici
+dentro la directory privata del run, più `PD_PROOT_BIN` verso il `proot` reale.
+Il preflight deve mostrare la data location sintetica ed essere vuoto prima
+dell'install. Un alias casuale exact-name viene registrato prima dell'effetto;
+il vero runtime viene soltanto controllato con `list --quiet` per escludere la
+collisione. Non vengono usati `clear-cache`, `reset`, target globali o alias
+utente; rootfs e layer importati spariscono rimuovendo il solo sandbox dopo
+aver drenato i processi posseduti.
+
+La suite copre:
+
+1. T1, visibilità positiva e pruning dopo exit normale;
+2. T2, due sessioni indipendenti sullo stesso alias;
+3. F1, registrazione negata;
+4. F2, lettura del registry negata e ripristinata;
+5. F3, record locked troncato sullo stesso inode.
+
+L'oracolo usa il child foreground insieme a boot ID, PID, start time, PGID e
+SID; non è un parser production. S2 non prova tree-kill, parent/daemon loss o
+segnali guest: questi casi appartengono a S3.

@@ -1,8 +1,8 @@
 # Architettura di Termux Stacks
 
-**Stato:** proposta v0.1; S0 e S1 completati, spike S2–S4 aperti
+**Stato:** proposta v0.1; S0–S2 completati, spike S3–S4 aperti
 **Target:** Termux/Android senza root
-**Baseline da verificare:** `proot-distro 5.6.0`
+**Baseline engine verificata:** `proot-distro 5.6.0`
 **Autorità:** componenti interni, persistenza e recovery
 
 ## 1. Criterio di progetto
@@ -173,7 +173,8 @@ Operazioni v0:
 - install di immagine/archive con alias;
 - run foreground;
 - list/ps delle sessioni;
-- kill per PID radice restituito da `proot-distro ps` o alias registrato;
+- kill per session identifier emesso da `proot-distro ps` o alias registrato,
+  soltanto dopo la qualificazione S3;
 
 `--detach` è vietato: scarta stdio e sottrae il processo alla supervisione
 diretta. L'adapter deve catturare stdout, stderr ed exit status.
@@ -191,13 +192,21 @@ dichiarati; shared home, shared tmp e X11 non sono impliciti. `--minimal` è
 fuori da v0 finché non supera uno spike dedicato. `login` e `--detach` non
 avviano workload production.
 
-### 8.1 Limiti da verificare
+### 8.1 Session registry qualificato
 
-Il registry delle sessioni engine è best effort. Un `ps` vuoto non è prova
-sufficiente che nessun processo esista se la registrazione può essere
-fallita. Lo spike deve testare il filesystem reale, failure di `flock` e
-crash; finché non passa, la recovery automatica non promette assenza di
-duplicati.
+S2 ha confermato che il registry delle sessioni engine è best effort. Una
+registrazione negata, una lettura negata e un record JSON malformed possono
+tutti produrre `ps --quiet` vuoto con exit 0 mentre il processo osservato
+indipendentemente è vivo. La tabella completa è output umano su stderr; non è
+un protocollo stabile. `--quiet` espone soltanto il PID registrato, che è un
+session identifier dell'engine e non autorizza da solo un segnale host.
+
+Nel demone vivo, il child handle con `boot_id`, PID e `/proc` start time è
+l'evidenza primaria; una riga positiva del registry è complementare. Dopo un
+crash del demone l'handle è perduto: registry empty, errore di osservazione o
+record malformed significano `unknown`, mai `absent`. v0 non avvia, ricrea o
+cancella automaticamente quel servizio. La strategia di stop resta sospesa
+fino a S3.
 
 `run CONTAINER -- ARGS` conserva Entrypoint, sostituisce Cmd e non aggiunge
 una shell. `login -- COMMAND` avvolge invece il comando nella shell
@@ -225,7 +234,8 @@ automaticamente.
 
 Per un processo servono almeno alias engine, PID osservato, start time quando
 disponibile e boot identity. Un PID salvato non autorizza da solo un segnale.
-`ps` engine e child handle sono evidenze complementari, non infallibili.
+Il child handle è primario finché appartiene al demone corrente; `ps` engine è
+complementare e un risultato vuoto non prova mai l'assenza.
 
 ## 10. Lifecycle di un servizio
 
@@ -275,9 +285,10 @@ All'avvio:
 7. non rimuove rootfs automaticamente.
 
 La strategia v0.1 è stop-and-recreate quando l'identità è provata, non
-adozione. Se lo spike dimostra che
-il session registry può fallire senza segnale osservabile, l'auto-restart dopo
-crash resta disabilitato e la specifica viene ridotta prima dell'MVP.
+adozione. S2 ha dimostrato che il session registry può fallire senza segnale
+osservabile: l'auto-restart dopo crash del demone resta disabilitato.
+L'operatore riceve `unknown` e una diagnostica; non viene creato un possibile
+duplicato.
 
 ## 12. Update
 

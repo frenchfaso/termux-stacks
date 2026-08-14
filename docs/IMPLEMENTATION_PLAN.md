@@ -4,14 +4,16 @@
 **Strategia:** spike prima, vertical slice, poi MVP
 **Implementazione:** Rust, un package/crate, un binario
 
-**Avanzamento:** S0 e S1 completate il 2026-08-14. Scaffold, CLI minima, daemon
+**Avanzamento:** S0–S2 completate il 2026-08-14. Scaffold, CLI minima, daemon
 stub, path privati, lock singleton, CI host, package aarch64 e integrazione
 runit sono verdi. L'harness device v3 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
 il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
 [evidence/S0.md](evidence/S0.md). S1 ha qualificato `Entrypoint`/`Cmd`, argv,
 environment ordinario non riservato, working directory ed exit status con
-31 PASS, 0 FAIL e 0 SKIP;
-il record è in [evidence/S1.md](evidence/S1.md). La fixture package resta
+31 PASS, 0 FAIL e 0 SKIP. S2 ha riprodotto tre falsi negativi del session
+registry con 16 PASS, 0 FAIL e 0 SKIP, imponendo `unknown` dopo la perdita
+dell'handle del child. I record sono [evidence/S1.md](evidence/S1.md) ed
+[evidence/S2.md](evidence/S2.md). La fixture package resta
 intenzionalmente un template pre-release: tag pubblico e checksum del tarball
 GitHub appartengono a G3.
 
@@ -65,7 +67,7 @@ Tutto il resto è differito. La feature matrix normativa è in
 | framing IPC | JSON Lines, 1 MiB, versione esatta | frame e timeout test |
 | command | default OCI o override limitato | matrice engine |
 | stop | `proot-distro kill` | signal/tree test |
-| recovery automatica | disabilitata se ambigua | session registry test |
+| recovery automatica | fail-closed confermato | S2: empty non prova assenza |
 | alias cleanup | mai automatico se incerto | crash install test |
 | licenza | Apache-2.0 | decisa il 2026-08-14 |
 | nome | `termux-stacks` pre-release | feedback maintainer |
@@ -159,33 +161,35 @@ Exit:
   rappresentabili;
 - nessuna concatenazione shell è costruita dal runtime.
 
-## 7. Fase S2 — Session registry e osservazione
+## 7. Fase S2 — Session registry e osservazione — completata
 
 **Obiettivo:** sapere quando `proot-distro ps` è evidenza sufficiente.
 
-Test:
+La suite minima eseguita su `proot-distro 5.6.0` comprende:
 
-- una e più sessioni sullo stesso alias;
-- crash normale, SIGKILL e PID reuse simulato;
-- registrazione con directory non scrivibile;
-- `flock` non disponibile o fallito, se riproducibile;
-- registro troncato e output inatteso;
-- parent harness che muore mentre la sessione resta viva.
+- T1: una sessione visibile, exit normale e pruning;
+- T2: due sessioni contemporanee sullo stesso alias e rimozione indipendente;
+- F1: pubblicazione negata con workload vivo ma `ps --quiet` vuoto;
+- F2: lettura negata con scomparsa transiente e successiva ricomparsa;
+- F3: JSON troncato sullo stesso inode ancora locked, omesso mentre il
+  workload resta vivo e potato dopo l'exit.
+
+Parent/daemon loss e root PRoot terminato con guest ancora vivo passano a S3,
+dove si qualifica anche il target dei segnali. PID reuse sintetico e fault di
+`flock` non aggiungono una garanzia utile dopo i falsi negativi già osservati
+e non sono gate di S2.
 
 L'harness deve osservare process tree host indipendentemente da `pd ps` per
 individuare falsi negativi. Ogni caso conserva output raw, exit status e
 osservazione indipendente in un corpus; una rappresentazione golden annota il
 significato atteso senza introdurre ancora codice di parsing production.
 
-Exit:
-
-- corpus raw + golden sufficiente a implementare e regredire il parser in S5;
-- condizione precisa in cui un risultato empty può essere considerato forte;
-- decisione: auto-recovery abilitata, oppure stato `unknown` con diagnostica
-  e intervento manuale.
-
-Se un falso negativo non è rilevabile, **non** si promette restart automatico
-post-crash nell'MVP.
+Exit verificato: **16 PASS, 0 FAIL, 0 SKIP** nel runtime sintetico, con corpus
+raw e golden. La decisione è definitiva per v0: un risultato empty non è mai
+da solo evidenza forte. Durante la vita dello stesso demone l'handle del child
+e `boot_id/PID/starttime` sono l'evidenza primaria; il registry è
+complementare. Dopo la perdita dell'handle, empty, errore o record malformed
+producono `unknown`: niente restart, recreate o delete automatico.
 
 ## 8. Fase S3 — Signal e tree-kill
 

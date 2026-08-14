@@ -19,8 +19,9 @@ jobs:
 
       - name: Validate device harness syntax
         run: |
-          bash -n tests/device/lib.sh tests/device/s0.sh tests/device/s1.sh
-          bash -n tests/device/fixtures/s1/probe
+          bash -n tests/device/lib.sh tests/device/s0.sh tests/device/s1.sh tests/device/s2.sh
+          bash -n tests/device/fixtures/s1/probe tests/device/fixtures/s2/worker
+          bash -n tests/device/fixtures/s2/verify-oci.sh
 
       - name: Install Rust 1.93
         run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt

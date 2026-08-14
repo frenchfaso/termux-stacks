@@ -18,9 +18,12 @@ dello socket stale, restart dopo SIGKILL e disable finale. Il record
 riproducibile è in [docs/evidence/S0.md](docs/evidence/S0.md).
 Anche lo spike **S1 è completato**: 31 PASS hanno qualificato la composizione
 OCI di `Entrypoint`/`Cmd`, argv, working directory, environment ordinario ed
-exit status; il record è in [docs/evidence/S1.md](docs/evidence/S1.md). Non
-esiste ancora un runtime utilizzabile: session registry, segnali, ownership e
-recovery devono superare S2–S4 prima di ampliare le funzionalità.
+exit status; il record è in [docs/evidence/S1.md](docs/evidence/S1.md). Lo
+spike **S2 è completato**: 16 PASS hanno riprodotto tre falsi negativi del
+session registry e congelato una policy fail-closed; il record è in
+[docs/evidence/S2.md](docs/evidence/S2.md). Non esiste ancora un runtime
+utilizzabile: segnali e ownership devono superare S3–S4 prima del vertical
+slice S5.
 
 La direzione architetturale è congelata solo nei punti essenziali:
 
@@ -33,6 +36,11 @@ La direzione architetturale è congelata solo nei punti essenziali:
 - un adapter isolato che usa soltanto la CLI pubblica di `proot-distro`;
 - un rootfs scrivibile distinto per servizio e persistenza solo esplicita;
 - recovery conservativa: in caso di ambiguità, fermarsi e chiedere intervento.
+
+In particolare, `proot-distro ps` vuoto non prova l'assenza di un workload.
+Finché il demone conserva l'handle del figlio usa PID, start time e boot ID;
+dopo la perdita di quell'handle uno stato non osservabile diventa `unknown` e
+non autorizza restart, recreate o delete automatici.
 
 ## Primo risultato utilizzabile
 
