@@ -465,6 +465,7 @@ g3_static_package() {
 	local package version arch depends installed_size prefix_root binary copyright_link
 	local expected_machine expected_interpreter expected_conffiles expected_control
 	local expected_data actual_control actual_data needed hook report
+	local runpath runpath_count expected_runpath
 	local package_ok=1
 
 	report=$G3_PACKAGES_DIR/$label
@@ -617,7 +618,17 @@ g3_static_package() {
 		"$report.elf-symbols" || package_ok=0
 	grep -Eq '(^|, )stripped$' "$report.elf-file" || package_ok=0
 	if grep -q 'not stripped' "$report.elf-file"; then package_ok=0; fi
-	if grep -Eq '\((RPATH|RUNPATH)\)' "$report.elf-dynamic"; then package_ok=0; fi
+	if grep -Eq '\(RPATH\)' "$report.elf-dynamic"; then package_ok=0; fi
+	runpath_count=$(grep -Ec '\(RUNPATH\)' "$report.elf-dynamic" || true)
+	runpath=$(sed -n 's/.*(RUNPATH).*Library runpath: \[\([^]]*\)\].*/\1/p' \
+		"$report.elf-dynamic")
+	if [[ $label == old ]]; then
+		expected_runpath=$G3_PREFIX/bin/../../usr/lib:$G3_PREFIX/lib
+	else
+		expected_runpath=$G3_PREFIX/lib
+	fi
+	[[ $runpath_count -eq 1 && $runpath == "$expected_runpath" ]] || package_ok=0
+	printf '%s\n' "$runpath" >"$report.runpath"
 	if grep -Eq '\.debug_(info|line|str|abbrev)' "$report.elf-sections"; then package_ok=0; fi
 	if grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$report.elf-sections"; then package_ok=0; fi
 	if grep -Eq 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART)' \

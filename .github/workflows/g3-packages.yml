@@ -94,7 +94,7 @@ jobs:
       - name: Upload dependency evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: g3-termux-stacks-dependencies
+          name: g3-termux-stacks-dependencies-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/g3-dependencies
           if-no-files-found: error
           retention-days: 14
@@ -598,7 +598,13 @@ jobs:
           # ET_DYN, a nonzero entry point, and exact PT_INTERP prove the shape.
           if grep -q 'not stripped' "$elf_dir/file.txt"; then false; fi
           grep -Eq '(^|, )stripped$' "$elf_dir/file.txt"
-          if grep -Eq '\((RPATH|RUNPATH)\)' "$elf_dir/dynamic.txt"; then false; fi
+          if grep -Eq '\(RPATH\)' "$elf_dir/dynamic.txt"; then false; fi
+          [[ $(grep -Ec '\(RUNPATH\)' "$elf_dir/dynamic.txt") -eq 1 ]]
+          runpath=$(sed -n \
+            's/.*(RUNPATH).*Library runpath: \[\([^]]*\)\].*/\1/p' \
+            "$elf_dir/dynamic.txt")
+          [[ $runpath == /data/data/com.termux/files/usr/lib ]]
+          printf '%s\n' "$runpath" >"$elf_dir/runpath.txt"
           if grep -Eq '\.debug_(info|line|str|abbrev)' "$elf_dir/sections.txt"; then false; fi
           if grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$elf_dir/sections.txt"; then false; fi
           grep -E 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART)' \
@@ -623,7 +629,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: g3-termux-stacks-${{ matrix.arch }}-${{ job.status }}
+          name: g3-termux-stacks-${{ matrix.arch }}-${{ job.status }}-attempt-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
           retention-days: 14
