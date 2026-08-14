@@ -5,16 +5,45 @@ an official Termux recipe or an installation channel.
 
 The canonical recipe can exist only at
 `termux/termux-packages/packages/termux-stacks/build.sh`. Before copying this
-fixture there, replace every placeholder, select the SQLite strategy, add the
-release checksum, exercise the removal script, and validate all four Termux
-architectures.
+fixture there, update the release fields, add the source checksum, exercise
+the removal script, and validate all four Termux architectures. The selected
+SQLite strategy is dynamic linking against the packaged `libsqlite`. The
+engine dependency is pinned to `proot-distro 5.6.0` because the runtime
+capability probe accepts exactly that qualified version.
 
 The fixture's `prerm` acts only on an actual package removal. It disables and
 stops the fixed `termux-stacksd` runit service and removes that package-owned
 service directory. It deliberately does nothing during an upgrade, so an
 upgrade neither restarts the daemon nor changes runtime state. The state
 database, logs, volumes and PRoot root filesystems are never package-owned
-removal targets.
+removal targets. For Debian output the generated guard accepts only the
+`remove` action. For Pacman output the Termux builder converts the same script
+to `pre_remove`, so the generated body is unconditional and cannot run during
+an upgrade.
+
+## G3 canonical build
+
+Use a clean, commit-pinned `termux-packages` clone and a fresh package-builder
+container. Create the immutable upstream tag before materializing the checksum
+in the external recipe, hash the exact GitHub tag archive, and never move the
+tag. A release candidate should use Debian pre-release ordering in the recipe,
+for example `0.1.0~rc.1`; the source URL maps that value to the SemVer tag
+`v0.1.0-rc.1`.
+
+Stage the materialized fixture as
+`packages/termux-stacks/build.sh`, then run:
+
+```bash
+CONTAINER_NAME=termux-package-builder-termux-stacks \
+  ./scripts/run-docker.sh \
+  ./build-package.sh -a all -f -r -I termux-stacks
+```
+
+Accept the outputs only after all four architectures are present, the package
+metadata and file list are exact, the service is disabled by default, and each
+ELF dependency is provided by a declared runtime package. The release gate
+must also inspect the binary for test hooks and run the install, live-upgrade,
+disabled-upgrade, and removal matrix on Android.
 
 ## S0 on-device fallback
 
