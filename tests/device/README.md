@@ -316,7 +316,7 @@ application-private tree.
   coreutils (`sha256sum`, `sync`, `sort`, `cmp`, `find`, `stat`);
 - a clean Git checkout and a debug `termux-stacks` binary built from that
   source; a dirty or untracked source tree is rejected;
-- the reviewed revision-2 v1 and v2 arm64 OCI archives and their archive
+- the reviewed revision-3 v1 and v2 arm64 OCI archives and their archive
   SHA-256 values;
 - enough free app-private storage for several disposable Alpine rootfs
   generations. No package installation is performed by the harness.
@@ -358,16 +358,17 @@ for version in v1 v2; do
 done
 ```
 
-Revision 2 adds the failure-timestamp protocol used by the restart timing
-oracle. That changes the worker bytes and invalidates both previous manifests:
+Revision 3 replaces an unavailable BusyBox `httpd` applet with the `nc`
+applet already present in the pinned base. That changes the worker bytes and
+invalidates both previous manifests:
 
 ```text
-v1 superseded: sha256:be6828cb0c20d3f37b6161f11818e1fd2542e0fa403f35a4af3cc513f64097ac
-v2 superseded: sha256:284bf5b40b1a54e9940f496170598f8d5b26a5f2d232cd43b68b5d4f87a8da9e
+v1 superseded: sha256:e109d20537180d5b8d8d1f346a7573e2c417f502de7b590cd1df02a077744c5e
+v2 superseded: sha256:0fa8687a5d0607ff25804c2e7a67da8439f4af2990868ecc29677ca0b0ceec77
 ```
 
 Those values are historical evidence only and must never authorize a
-revision-2 run. The two revision-2 manifest digests are reviewed and frozen
+revision-3 run. The two revision-3 manifest digests are reviewed and frozen
 together as `BLESSED_MANIFEST_*_SHA256` values in `verify-oci.sh`. Whenever
 the worker, Containerfile, or build contract changes, rebuild and review both
 fixtures, replace both trust roots in the same commit, and leave the source
@@ -380,7 +381,7 @@ explicit harness inputs. `verify-oci.sh` verifies the frozen manifest for the
 selected version, every referenced compressed blob, the `linux/arm64` config,
 both decompressed layer diff IDs, the pinned base diff ID, fixture revision,
 Entrypoint, version marker, and archived worker bytes against the repository
-fixture. The reviewed revision-2 archive and manifest values are recorded in
+fixture. The reviewed revision-3 archive and manifest values are recorded in
 `docs/evidence/G2.md`.
 The archives and raw evidence remain outside Git.
 

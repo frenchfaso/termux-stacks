@@ -2,6 +2,27 @@
 
 set -eu
 
+serve_http() {
+	body=/www/index.html
+	[ -f "$body" ] || exit 35
+	carriage_return=$(printf '\r')
+	while IFS= read -r request_line; do
+		[ "$request_line" = "$carriage_return" ] && break
+	done
+	content_length=$(wc -c <"$body" | tr -d '[:space:]')
+	case $content_length in
+		'' | *[!0-9]*) exit 35 ;;
+	esac
+	printf 'HTTP/1.0 200 OK\r\nContent-Length: %s\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n' \
+		"$content_length"
+	cat "$body"
+	exit 0
+}
+
+if [ "${G2_HTTP_HANDLER:-}" = 1 ]; then
+	serve_http
+fi
+
 mode=${1:?missing worker mode}
 role=${2:-$mode}
 events=${G2_EVENTS_DIR:-/events}
@@ -63,7 +84,8 @@ case $mode in
 				printf '%s\n' "$version" >"$events/web.ready"
 				printf 'dependency=<seed> volume=<%s> port=<%s>\n' \
 					"$volume_value" "${G2_PORT:?missing port}"
-				busybox httpd -f -p "127.0.0.1:$G2_PORT" -h /www &
+				G2_HTTP_HANDLER=1 busybox nc -lk -s 127.0.0.1 \
+					-p "$G2_PORT" -e /g2-worker &
 				server_pid=$!
 				trap stop_worker HUP INT TERM
 				wait "$server_pid"

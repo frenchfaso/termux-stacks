@@ -5,18 +5,18 @@ set -u
 set -o pipefail
 
 readonly BASE_DIFF_ID=sha256:b2848c02ac6ff53d265469b5b30f649f335e546a83330cd8916d54e65e640409
-readonly FIXTURE_REVISION=2
+readonly FIXTURE_REVISION=3
 
-# These were the last reviewed revision-1 manifests. Revision 2 changes the
-# worker protocol, so they are evidence of what was superseded, not values that
-# may authorize a device run.
-readonly SUPERSEDED_MANIFEST_V1_SHA256=be6828cb0c20d3f37b6161f11818e1fd2542e0fa403f35a4af3cc513f64097ac
-readonly SUPERSEDED_MANIFEST_V2_SHA256=284bf5b40b1a54e9940f496170598f8d5b26a5f2d232cd43b68b5d4f87a8da9e
+# These were the last reviewed revision-2 manifests. Revision 3 replaces the
+# unavailable BusyBox httpd applet with the pinned nc applet, so these values
+# are evidence of what was superseded, not values that may authorize a run.
+readonly SUPERSEDED_MANIFEST_V1_SHA256=e109d20537180d5b8d8d1f346a7573e2c417f502de7b590cd1df02a077744c5e
+readonly SUPERSEDED_MANIFEST_V2_SHA256=0fa8687a5d0607ff25804c2e7a67da8439f4af2990868ecc29677ca0b0ceec77
 
-# Reviewed revision-2 manifests. Both values must change together whenever the
+# Reviewed revision-3 manifests. Both values must change together whenever the
 # fixture worker, Containerfile, or build contract changes.
-readonly BLESSED_MANIFEST_V1_SHA256=e109d20537180d5b8d8d1f346a7573e2c417f502de7b590cd1df02a077744c5e
-readonly BLESSED_MANIFEST_V2_SHA256=0fa8687a5d0607ff25804c2e7a67da8439f4af2990868ecc29677ca0b0ceec77
+readonly BLESSED_MANIFEST_V1_SHA256=417db6a17f5e8c423f2489629bc2cd9523d47e11412af34c7c56cf6b62f449bf
+readonly BLESSED_MANIFEST_V2_SHA256=6c372dbb428e0d354716da4d6f96d01230e7be413863a75d6498a52d09815c80
 
 fail() {
 	printf 'verify-oci-g2: %s\n' "$*" >&2
@@ -62,7 +62,7 @@ done
 for trusted_manifest in "$BLESSED_MANIFEST_V1_SHA256" "$BLESSED_MANIFEST_V2_SHA256"; do
 	[[ $trusted_manifest != "$SUPERSEDED_MANIFEST_V1_SHA256" && \
 		$trusted_manifest != "$SUPERSEDED_MANIFEST_V2_SHA256" ]] || \
-		fail "a superseded revision-1 manifest cannot authorize fixture revision $FIXTURE_REVISION"
+		fail "a superseded manifest cannot authorize fixture revision $FIXTURE_REVISION"
 done
 if [[ $expected_version == v1 ]]; then
 	expected_manifest_sha=$BLESSED_MANIFEST_V1_SHA256
