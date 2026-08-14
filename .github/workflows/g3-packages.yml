@@ -188,7 +188,9 @@ jobs:
             done <"$list"
             grep -Fxq "${archive_prefix}Cargo.toml" "$list"
             grep -Fxq "${archive_prefix}Cargo.lock" "$list"
-            ! grep -Eq '(^|/)(\.git|target)(/|$)' "$list"
+            if grep -Eq '(^|/)(\.git|target)(/|$)' "$list"; then
+              return 1
+            fi
           }
           check_archive "$git_archive_path" "$RUNNER_TEMP/git-archive.list"
           git_archive_sha256=$(sha256sum "$git_archive_path" | awk '{print $1}')
@@ -399,7 +401,28 @@ jobs:
         env:
           DEBIAN_VERSION: ${{ steps.source.outputs.debian_version }}
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          status_file=$EVIDENCE_DIR/inspection-status.txt
+          inspection_error() {
+            local rc=$1 line=$2 command=$3
+            trap - ERR
+            set +e
+            printf 'ERR rc=%s line=%s BASH_COMMAND=%q\n' \
+              "$rc" "$line" "$command" >&2
+            mkdir -p "$EVIDENCE_DIR"
+            {
+              printf 'status=failed\n'
+              printf 'architecture=%s\n' "$BUILD_ARCH"
+              printf 'rc=%s\n' "$rc"
+              printf 'line=%s\n' "$line"
+              printf 'BASH_COMMAND=%q\n' "$command"
+            } >"$status_file"
+            exit "$rc"
+          }
+          trap 'inspection_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+          mkdir -p "$EVIDENCE_DIR"
+          printf 'status=incomplete\narchitecture=%s\n' "$BUILD_ARCH" \
+            >"$status_file"
           for command_name in dash dpkg-deb file find readelf sha256sum strings; do
             command -v "$command_name" >/dev/null
           done
@@ -464,15 +487,15 @@ jobs:
           grep -Fq '/bin/sv-disable' "$control_dir/prerm"
           grep -Fq '/bin/sv" down termux-stacksd' "$control_dir/prerm"
           grep -Fq '/var/service/termux-stacksd' "$control_dir/prerm"
-          ! grep -Fq 'rm -rf' "$control_dir/prerm"
-          ! grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
-            "$control_dir/prerm"
+          if grep -Fq 'rm -rf' "$control_dir/prerm"; then false; fi
+          if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
+            "$control_dir/prerm"; then false; fi
           grep -Fq '[ "${1:-}" = purge ]' "$control_dir/postrm"
           grep -Fq 'rm -rf -- "/data/data/com.termux/files/usr/var/service/termux-stacksd"' \
             "$control_dir/postrm"
           [[ $(grep -Ec '^[[:space:]]*rm -rf -- ' "$control_dir/postrm") -eq 1 ]]
-          ! grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
-            "$control_dir/postrm"
+          if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
+            "$control_dir/postrm"; then false; fi
 
           sort "$control_dir/conffiles" >"$RUNNER_TEMP/conffiles.sorted"
           printf '%s\n' \
@@ -562,21 +585,29 @@ jobs:
           grep -Eq "Class:[[:space:]]+$class" "$elf_dir/header.txt"
           grep -Fq "Machine:                           $machine" "$elf_dir/header.txt"
           grep -Eq 'Type:[[:space:]]+DYN' "$elf_dir/header.txt"
-          grep -Fq "Requesting program interpreter: $interpreter" \
+          grep -Eq 'Entry point address:[[:space:]]+0x[1-9a-fA-F][0-9a-fA-F]*' \
+            "$elf_dir/header.txt"
+          grep -Fq "Requesting program interpreter: $interpreter]" \
             "$elf_dir/program-headers.txt"
-          grep -Eq '[[:space:]]flock(@[^[:space:]]+)?$' "$elf_dir/symbols.txt"
-          grep -Eq '[[:space:]]sqlite3_open_v2(@[^[:space:]]+)?$' "$elf_dir/symbols.txt"
-          grep -q 'pie executable' "$elf_dir/file.txt"
-          ! grep -q 'not stripped' "$elf_dir/file.txt"
+          grep -Eq '[[:space:]]flock(@[^[:space:]]+)?([[:space:]]+\([0-9]+\))?$' \
+            "$elf_dir/symbols.txt"
+          grep -Eq '[[:space:]]sqlite3_open_v2(@[^[:space:]]+)?([[:space:]]+\([0-9]+\))?$' \
+            "$elf_dir/symbols.txt"
+          # termux-elf-cleaner clears unsupported DF_1_PIE, so file(1) may
+          # classify this Android PIE as a shared object. Executable mode,
+          # ET_DYN, a nonzero entry point, and exact PT_INTERP prove the shape.
+          if grep -q 'not stripped' "$elf_dir/file.txt"; then false; fi
           grep -Eq '(^|, )stripped$' "$elf_dir/file.txt"
-          ! grep -Eq '\((RPATH|RUNPATH)\)' "$elf_dir/dynamic.txt"
-          ! grep -Eq '\.debug_(info|line|str|abbrev)' "$elf_dir/sections.txt"
-          ! grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$elf_dir/sections.txt"
+          if grep -Eq '\((RPATH|RUNPATH)\)' "$elf_dir/dynamic.txt"; then false; fi
+          if grep -Eq '\.debug_(info|line|str|abbrev)' "$elf_dir/sections.txt"; then false; fi
+          if grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$elf_dir/sections.txt"; then false; fi
           grep -E 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART)' \
             "$elf_dir/strings.txt" >"$elf_dir/fault-hooks.txt" || true
           [[ ! -s $elf_dir/fault-hooks.txt ]]
 
           rm -rf -- "$root_dir"
+          printf 'status=accepted\narchitecture=%s\n' "$BUILD_ARCH" \
+            >"$status_file"
           (
             cd "$EVIDENCE_DIR"
             find . -type f ! -path ./SHA256SUMS -print0 | sort -z |
@@ -589,9 +620,10 @@ jobs:
           )
 
       - name: Upload package evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: g3-termux-stacks-${{ matrix.arch }}
+          name: g3-termux-stacks-${{ matrix.arch }}-${{ job.status }}
           path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
           retention-days: 14

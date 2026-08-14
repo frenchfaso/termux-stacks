@@ -609,8 +609,12 @@ g3_static_package() {
 	printf '%s\n' "$needed" >"$report.needed"
 	[[ $needed == $'libc.so\nlibdl.so\nlibsqlite3.so' ]] || package_ok=0
 	grep -q 'Type:.*DYN' "$report.elf-header" || package_ok=0
-	grep -Eq '[[:space:]]flock(@[^[:space:]]+)?$' "$report.elf-symbols" || package_ok=0
-	grep -Eq '[[:space:]]sqlite3_open_v2(@[^[:space:]]+)?$' "$report.elf-symbols" || package_ok=0
+	grep -Eq 'Entry point address:[[:space:]]+0x[1-9a-fA-F][0-9a-fA-F]*' \
+		"$report.elf-header" || package_ok=0
+	grep -Eq '[[:space:]]flock(@[^[:space:]]+)?([[:space:]]+\([0-9]+\))?$' \
+		"$report.elf-symbols" || package_ok=0
+	grep -Eq '[[:space:]]sqlite3_open_v2(@[^[:space:]]+)?([[:space:]]+\([0-9]+\))?$' \
+		"$report.elf-symbols" || package_ok=0
 	grep -Eq '(^|, )stripped$' "$report.elf-file" || package_ok=0
 	if grep -q 'not stripped' "$report.elf-file"; then package_ok=0; fi
 	if grep -Eq '\((RPATH|RUNPATH)\)' "$report.elf-dynamic"; then package_ok=0; fi
@@ -641,7 +645,8 @@ g3_static_package() {
 		*) return 1 ;;
 	esac
 	grep -Fq "Machine:                           $expected_machine" "$report.elf-header" || package_ok=0
-	grep -Fq "Requesting program interpreter: $expected_interpreter" "$report.elf-program" || package_ok=0
+	grep -Fq "Requesting program interpreter: $expected_interpreter]" \
+		"$report.elf-program" || package_ok=0
 
 	"$binary" --version >"$report.version" 2>"$report.version.stderr" || package_ok=0
 	grep -Eq '^termux-stacks [^[:space:]]+$' "$report.version" || package_ok=0
