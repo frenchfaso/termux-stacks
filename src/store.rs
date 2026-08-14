@@ -236,13 +236,17 @@ impl Store {
                      WHERE o.stack_name = v.stack_name
                        AND os.service_name = v.name
                        AND os.generation = candidate.generation
-                       AND o.operation = 'up' AND o.outcome IS NULL
+                       AND o.operation = 'up'
+                       AND (
+                           o.outcome IS NULL
+                           OR (?2 = 0 AND o.outcome = 'failure')
+                       )
                 )
               WHERE v.stack_name = ?1 AND v.active = 1
               ORDER BY v.name",
         )?;
         let services = statement
-            .query_map([&name], |row| {
+            .query_map(params![&name, revision], |row| {
                 Ok(ServiceStatus {
                     name: row.get(0)?,
                     desired_state: row.get(1)?,
@@ -5270,6 +5274,73 @@ mod tests {
             store.resumable_services("stable").expect("safe resume"),
             vec!["app"]
         );
+
+        drop(store);
+        fs::remove_dir_all(prefix).expect("remove test prefix");
+    }
+
+    #[test]
+    fn cold_reconcile_projects_a_terminal_revision_zero_candidate() {
+        let prefix = crate::paths::test_prefix("store-terminal-candidate-status");
+        let paths = RuntimePaths::new(prefix.clone());
+        paths.prepare().expect("prepare paths");
+        let mut store = Store::open(&paths.database_path()).expect("open store");
+        let manifest = manifest("partial", &["seed", "web"]);
+        let service_plans = plans(&prefix, &["seed", "web"]);
+        let seed_alias = service_plans["seed"].alias.clone();
+
+        store
+            .begin_up(
+                "partial-up",
+                "partial",
+                Path::new("/m"),
+                &manifest,
+                &service_plans,
+            )
+            .expect("begin up");
+        store
+            .mark_logs_prepared("partial-up", "partial", "seed")
+            .expect("seed logs");
+        store
+            .mark_install_invoked("partial-up", "partial", "seed")
+            .expect("seed install intent");
+        store
+            .mark_installed("partial-up", "partial", "seed")
+            .expect("seed installed");
+        store
+            .mark_start_invoked("partial-up", "partial", "seed")
+            .expect("seed start intent");
+        store
+            .mark_starting("partial-up", "partial", "seed", 100, 200, "boot")
+            .expect("seed starting");
+        store
+            .mark_running("partial-up", "partial", "seed", 100)
+            .expect("seed running");
+
+        assert_eq!(store.reconcile_cold_start().expect("reconcile"), 2);
+        let status = store.stack_status("partial").unwrap().unwrap();
+        assert_eq!(status.revision, 0);
+        assert_eq!(status.observed_state, "unknown");
+        let by_name = status
+            .services
+            .iter()
+            .map(|service| (service.name.as_str(), service))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(by_name["seed"].observed_state, "unknown");
+        assert_eq!(by_name["seed"].rootfs_state, "installed");
+        assert_eq!(by_name["seed"].alias.as_deref(), Some(seed_alias.as_str()));
+        assert_eq!(by_name["web"].observed_state, "failed");
+        assert_eq!(by_name["web"].rootfs_state, "absent");
+        assert!(by_name["web"].alias.is_none());
+        let parent: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT phase, outcome FROM operations WHERE request_id = 'partial-up'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("terminal parent");
+        assert_eq!(parent, ("unknown".into(), "failure".into()));
 
         drop(store);
         fs::remove_dir_all(prefix).expect("remove test prefix");

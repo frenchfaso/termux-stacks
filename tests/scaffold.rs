@@ -830,7 +830,11 @@ fn cold_recovery_reuses_a_proven_installed_rootfs() {
     assert!(recovered.status.success(), "{recovered:?}");
     let recovered_status = output_json(&recovered);
     assert_eq!(recovered_status["services"][0]["observed_state"], "failed");
-    assert_eq!(recovered_status["services"][0]["rootfs_state"], "absent");
+    assert_eq!(recovered_status["services"][0]["rootfs_state"], "installed");
+    assert_eq!(
+        recovered_status["services"][0]["alias"].as_str(),
+        Some(installed_alias.as_str())
+    );
     let retained = stored_generations(prefix.path(), "recover-install", "app");
     assert_eq!(
         retained.last().expect("retained candidate").state.as_str(),
@@ -986,6 +990,97 @@ fn raw_up_replay_uses_the_complete_payload_and_read_requests_cannot_poison_it() 
     let down = run_with_prefix(prefix.path(), &["down", "raw-replay"]);
     assert!(down.status.success(), "{down:?}");
     assert!(daemon.terminate_and_wait().success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn between_service_start_sigkill_preserves_the_terminal_candidate_without_replay() {
+    let prefix = TestPrefix::new("between-service-starts");
+    let manifest = write_fake_multi_manifest(prefix.path(), "between-service-starts");
+    let fault_dir = prepare_fault_dir(
+        prefix.path(),
+        &[
+            "before_intent",
+            "after_intent",
+            "after_install",
+            "after_start",
+        ],
+    );
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn_with_fault(prefix.path(), "faulted", Some(&fault_dir));
+    wait_until_ready(&mut daemon, &socket);
+
+    let mut up = spawn_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    wait_for_path(&fault_dir.join("between_service_starts.reached"));
+    let worker = stored_alias(prefix.path(), "between-service-starts", "worker");
+    let api = stored_alias(prefix.path(), "between-service-starts", "api");
+    let sessions_before = active_fake_session_ids(prefix.path());
+    assert_eq!(sessions_before.len(), 1);
+    let events_before = fake_events(prefix.path());
+    assert_eq!(event_count(&events_before, "install", &worker), 1);
+    assert_eq!(event_count(&events_before, "start", &worker), 1);
+    assert_eq!(event_count(&events_before, "install", &api), 0);
+    assert_eq!(event_count(&events_before, "start", &api), 0);
+    assert_eq!(
+        database_i64(
+            prefix.path(),
+            "SELECT count(*) FROM operation_services
+              WHERE stack_name = 'between-service-starts' AND outcome = 'success'",
+        ),
+        1
+    );
+    assert_eq!(
+        database_i64(
+            prefix.path(),
+            "SELECT count(*) FROM operation_services
+              WHERE stack_name = 'between-service-starts' AND outcome IS NULL",
+        ),
+        1
+    );
+
+    daemon.kill_and_wait();
+    assert!(!up.wait().expect("wait for interrupted up").success());
+    let mut restarted = DaemonProcess::spawn(prefix.path(), "restarted");
+    wait_until_ready(&mut restarted, &socket);
+
+    let recovered = run_with_prefix(prefix.path(), &["status", "between-service-starts"]);
+    assert!(recovered.status.success(), "{recovered:?}");
+    let recovered = output_json(&recovered);
+    assert_eq!(recovered["revision"], 0);
+    assert_eq!(recovered["observed_state"], "unknown");
+    let services = recovered["services"].as_array().expect("service array");
+    let worker_status = services
+        .iter()
+        .find(|service| service["name"] == "worker")
+        .expect("worker status");
+    assert_eq!(worker_status["observed_state"], "unknown");
+    assert_eq!(worker_status["rootfs_state"], "installed");
+    assert_eq!(worker_status["alias"].as_str(), Some(worker.as_str()));
+    let api_status = services
+        .iter()
+        .find(|service| service["name"] == "api")
+        .expect("api status");
+    assert_eq!(api_status["observed_state"], "failed");
+    assert_eq!(api_status["rootfs_state"], "absent");
+    assert!(api_status["alias"].is_null());
+    assert_eq!(
+        database_text(
+            prefix.path(),
+            "SELECT phase || ':' || outcome FROM operations
+              WHERE stack_name = 'between-service-starts' AND operation = 'up'",
+        ),
+        "unknown:failure"
+    );
+    assert_eq!(active_fake_session_ids(prefix.path()), sessions_before);
+    assert_eq!(fake_events(prefix.path()), events_before);
+
+    assert!(restarted.terminate_and_wait().success());
+    assert_eq!(active_fake_session_ids(prefix.path()), sessions_before);
+    signal_fake_sessions(prefix.path(), &sessions_before);
+    wait_for_no_active_fake_sessions(prefix.path());
 }
 
 #[cfg(target_os = "linux")]
