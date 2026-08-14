@@ -6,7 +6,7 @@ use std::io::{self, Read};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub(crate) struct Store {
     connection: Connection,
@@ -21,6 +21,7 @@ pub(crate) struct StackStatus {
     pub(crate) revision: String,
     pub(crate) service_name: String,
     pub(crate) service_state: String,
+    pub(crate) rootfs_state: String,
     pub(crate) alias: String,
     pub(crate) session_id: Option<i64>,
     pub(crate) last_exit_code: Option<i64>,
@@ -50,6 +51,7 @@ pub(crate) struct ExistingStack {
     pub(crate) service_name: String,
     pub(crate) alias: String,
     pub(crate) service_state: String,
+    pub(crate) rootfs_state: String,
     pub(crate) stdout_log: PathBuf,
     pub(crate) stderr_log: PathBuf,
 }
@@ -110,6 +112,7 @@ impl Store {
         } else if version != SCHEMA_VERSION {
             return Err(Error::Schema(version));
         }
+        apply_debug_storage_limit(&connection)?;
 
         let installation_id = connection.query_row(
             "SELECT value FROM meta WHERE key = 'installation_id'",
@@ -130,7 +133,7 @@ impl Store {
         self.connection
             .query_row(
                 "SELECT s.name, s.desired_state, s.observed_state, s.revision,
-                        v.name, v.observed_state, v.alias, v.session_id,
+                        v.name, v.observed_state, v.rootfs_state, v.alias, v.session_id,
                         v.last_exit_code, v.stdout_log_path, v.stderr_log_path
                    FROM stacks AS s
                    JOIN services AS v ON v.stack_name = s.name
@@ -144,11 +147,12 @@ impl Store {
                         revision: row.get(3)?,
                         service_name: row.get(4)?,
                         service_state: row.get(5)?,
-                        alias: row.get(6)?,
-                        session_id: row.get(7)?,
-                        last_exit_code: row.get(8)?,
-                        stdout_log: row.get(9)?,
-                        stderr_log: row.get(10)?,
+                        rootfs_state: row.get(6)?,
+                        alias: row.get(7)?,
+                        session_id: row.get(8)?,
+                        last_exit_code: row.get(9)?,
+                        stdout_log: row.get(10)?,
+                        stderr_log: row.get(11)?,
                     })
                 },
             )
@@ -189,9 +193,9 @@ impl Store {
         )?;
         transaction.execute(
             "INSERT INTO services(
-                 stack_name, name, image, command_json, alias, observed_state,
+                 stack_name, name, image, command_json, alias, observed_state, rootfs_state,
                  stdout_log_path, stderr_log_path
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', ?6, ?7)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', 'preparing', ?6, ?7)",
             params![
                 manifest.name,
                 manifest.service.name,
@@ -222,7 +226,8 @@ impl Store {
     pub(crate) fn mark_installed(&mut self, request_id: &str, stack: &str) -> Result<(), Error> {
         let transaction = self.connection.transaction()?;
         transaction.execute(
-            "UPDATE services SET observed_state = 'starting' WHERE stack_name = ?1",
+            "UPDATE services SET observed_state = 'starting', rootfs_state = 'installed'
+              WHERE stack_name = ?1",
             [stack],
         )?;
         transaction.execute(
@@ -230,6 +235,14 @@ impl Store {
             params![request_id, unix_time()?],
         )?;
         transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_rootfs_unknown(&self, stack: &str) -> Result<(), Error> {
+        self.connection.execute(
+            "UPDATE services SET rootfs_state = 'unknown' WHERE stack_name = ?1",
+            [stack],
+        )?;
         Ok(())
     }
 
@@ -390,19 +403,90 @@ impl Store {
 
     pub(crate) fn reconcile_cold_start(&self) -> Result<usize, Error> {
         let now = unix_time()?;
-        let changed = self.connection.execute(
+        let transaction = self.connection.unchecked_transaction()?;
+        let mut changed = transaction.execute(
             "UPDATE services
-                SET observed_state = 'unknown'
+                SET observed_state = 'failed', rootfs_state = 'absent'
+              WHERE stack_name IN (
+                    SELECT stack_name FROM operations
+                     WHERE outcome IS NULL AND operation = 'up'
+                       AND phase IN ('intent', 'logs_prepared')
+              )",
+            [],
+        )?;
+        transaction.execute(
+            "UPDATE stacks SET observed_state = 'failed', updated_at = ?1
+              WHERE name IN (
+                    SELECT stack_name FROM operations
+                     WHERE outcome IS NULL AND operation = 'up'
+                       AND phase IN ('intent', 'logs_prepared')
+              )",
+            [now],
+        )?;
+        transaction.execute(
+            "UPDATE operations
+                SET outcome = 'failure', error_code = 'interrupted_before_engine',
+                    error_message = 'daemon stopped before the engine invocation was durable',
+                    updated_at = ?1
+              WHERE outcome IS NULL AND operation = 'up'
+                AND phase IN ('intent', 'logs_prepared')",
+            [now],
+        )?;
+
+        changed += transaction.execute(
+            "UPDATE services
+                SET observed_state = 'failed', rootfs_state = 'installed'
+              WHERE stack_name IN (
+                    SELECT stack_name FROM operations
+                     WHERE outcome IS NULL AND operation = 'up' AND phase = 'installed'
+              )",
+            [],
+        )?;
+        transaction.execute(
+            "UPDATE stacks SET observed_state = 'failed', updated_at = ?1
+              WHERE name IN (
+                    SELECT stack_name FROM operations
+                     WHERE outcome IS NULL AND operation = 'up' AND phase = 'installed'
+              )",
+            [now],
+        )?;
+        transaction.execute(
+            "UPDATE operations
+                SET outcome = 'failure', error_code = 'interrupted_after_install',
+                    error_message = 'rootfs installation completed but start was not invoked',
+                    updated_at = ?1
+              WHERE outcome IS NULL AND operation = 'up' AND phase = 'installed'",
+            [now],
+        )?;
+
+        changed += transaction.execute(
+            "UPDATE services
+                SET observed_state = 'unknown',
+                    rootfs_state = CASE
+                        WHEN rootfs_state = 'preparing' THEN 'unknown'
+                        ELSE rootfs_state
+                    END
               WHERE observed_state IN ('preparing', 'starting', 'running', 'stopping')",
             [],
         )?;
         if changed > 0 {
-            self.connection.execute(
+            transaction.execute(
                 "UPDATE stacks SET observed_state = 'unknown', updated_at = ?1
-                  WHERE observed_state IN ('starting', 'running', 'stopping')",
+                  WHERE name IN (
+                        SELECT stack_name FROM services WHERE observed_state = 'unknown'
+                  )",
                 [now],
             )?;
         }
+        transaction.execute(
+            "UPDATE operations
+                SET outcome = 'failure', error_code = 'cold_start_unknown',
+                    error_message = 'daemon lost the live child handle; no effect was retried',
+                    updated_at = ?1
+              WHERE outcome IS NULL",
+            [now],
+        )?;
+        transaction.commit()?;
         Ok(changed)
     }
 
@@ -457,7 +541,7 @@ impl Store {
     pub(crate) fn existing_stack(&self, name: &str) -> Result<Option<ExistingStack>, Error> {
         self.connection
             .query_row(
-                "SELECT s.manifest, v.name, v.alias, v.observed_state,
+                "SELECT s.manifest, v.name, v.alias, v.observed_state, v.rootfs_state,
                         v.stdout_log_path, v.stderr_log_path
                    FROM stacks AS s
                    JOIN services AS v ON v.stack_name = s.name
@@ -469,8 +553,9 @@ impl Store {
                         service_name: row.get(1)?,
                         alias: row.get(2)?,
                         service_state: row.get(3)?,
-                        stdout_log: PathBuf::from(row.get::<_, String>(4)?),
-                        stderr_log: PathBuf::from(row.get::<_, String>(5)?),
+                        rootfs_state: row.get(4)?,
+                        stdout_log: PathBuf::from(row.get::<_, String>(5)?),
+                        stderr_log: PathBuf::from(row.get::<_, String>(6)?),
                     })
                 },
             )
@@ -503,6 +588,37 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn begin_retry_prepare(
+        &mut self,
+        request_id: &str,
+        stack: &str,
+        alias: &str,
+    ) -> Result<(), Error> {
+        let now = unix_time()?;
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO operations(
+                 request_id, stack_name, operation, phase, created_at, updated_at
+             ) VALUES (?1, ?2, 'up', 'intent', ?3, ?3)",
+            params![request_id, stack, now],
+        )?;
+        transaction.execute(
+            "UPDATE stacks SET desired_state = 'running', observed_state = 'starting',
+                    revision = ?2, updated_at = ?3 WHERE name = ?1",
+            params![stack, request_id, now],
+        )?;
+        transaction.execute(
+            "UPDATE services
+                SET alias = ?2, observed_state = 'preparing', rootfs_state = 'preparing',
+                    session_id = NULL, child_pid = NULL, child_starttime = NULL,
+                    boot_id = NULL, last_exit_code = NULL
+              WHERE stack_name = ?1",
+            params![stack, alias],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn record_noop_up(&self, request_id: &str, stack: &str) -> Result<(), Error> {
         let now = unix_time()?;
         self.connection.execute(
@@ -526,6 +642,46 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+#[cfg(debug_assertions)]
+fn apply_debug_storage_limit(connection: &Connection) -> Result<(), Error> {
+    let Some(raw_limit) = std::env::var_os("TERMUX_STACKS_SQLITE_MAX_PAGES") else {
+        return Ok(());
+    };
+    let raw_limit = raw_limit.into_string().map_err(|_| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_SQLITE_MAX_PAGES must be UTF-8",
+        ))
+    })?;
+    let limit = raw_limit.parse::<u32>().map_err(|_| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_SQLITE_MAX_PAGES must be a positive decimal integer",
+        ))
+    })?;
+    if limit == 0 {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_SQLITE_MAX_PAGES must be a positive decimal integer",
+        )));
+    }
+    let actual: u32 =
+        connection.query_row(&format!("PRAGMA max_page_count = {limit}"), [], |row| {
+            row.get(0)
+        })?;
+    if actual != limit {
+        return Err(Error::Io(io::Error::other(format!(
+            "SQLite refused debug max_page_count {limit}; active value is {actual}"
+        ))));
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn apply_debug_storage_limit(_connection: &Connection) -> Result<(), Error> {
+    Ok(())
 }
 
 fn prepare_database_file(path: &Path) -> Result<(), Error> {
@@ -572,6 +728,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), Error> {
              command_json TEXT NOT NULL,
              alias TEXT NOT NULL UNIQUE,
              observed_state TEXT NOT NULL,
+             rootfs_state TEXT NOT NULL,
              session_id INTEGER,
              child_pid INTEGER,
              child_starttime INTEGER,
@@ -699,6 +856,7 @@ mod tests {
         let running = store.stack_status("hello").expect("status").expect("stack");
         assert_eq!(running.desired_state, "running");
         assert_eq!(running.observed_state, "running");
+        assert_eq!(running.rootfs_state, "installed");
         assert_eq!(running.session_id, Some(123));
 
         store.begin_down("down-1", "hello").expect("down intent");
@@ -708,6 +866,7 @@ mod tests {
         let stopped = store.stack_status("hello").expect("status").expect("stack");
         assert_eq!(stopped.desired_state, "stopped");
         assert_eq!(stopped.observed_state, "stopped");
+        assert_eq!(stopped.rootfs_state, "installed");
         assert_eq!(stopped.last_exit_code, Some(0));
 
         drop(store);
@@ -738,5 +897,55 @@ mod tests {
         assert_eq!(version, 99);
         drop(connection);
         fs::remove_dir_all(prefix).expect("remove test prefix");
+    }
+
+    #[test]
+    fn cold_reconciliation_distinguishes_durable_phases() {
+        for (phase, expected_service, expected_rootfs) in [
+            ("intent", "failed", "absent"),
+            ("installed", "failed", "installed"),
+            ("start_invoked", "unknown", "installed"),
+        ] {
+            let prefix = crate::paths::test_prefix(&format!("reconcile-{phase}"));
+            let paths = RuntimePaths::new(prefix.clone());
+            paths.prepare().expect("prepare paths");
+            let mut store = Store::open(&paths.database_path()).expect("open store");
+            let source = "apiVersion: termux-stacks/v1alpha1\nkind: Stack\nmetadata:\n  name: hello\nservices:\n  app:\n    image: alpine:3.22\n";
+            let manifest = crate::manifest::parse(source).expect("parse manifest");
+            store
+                .begin_prepare(
+                    "up-1",
+                    source,
+                    &manifest,
+                    "txs-install-hello-app-random",
+                    &prefix.join("stdout.log"),
+                    &prefix.join("stderr.log"),
+                )
+                .expect("prepare intent");
+            if matches!(phase, "installed" | "start_invoked") {
+                store.mark_installed("up-1", "hello").expect("installed");
+            }
+            if phase == "start_invoked" {
+                store
+                    .set_operation_phase("up-1", "start_invoked")
+                    .expect("start intent");
+            }
+
+            assert_eq!(store.reconcile_cold_start().expect("reconcile"), 1);
+            let status = store.stack_status("hello").expect("status").expect("stack");
+            assert_eq!(status.service_state, expected_service, "phase={phase}");
+            assert_eq!(status.rootfs_state, expected_rootfs, "phase={phase}");
+            let outcome: String = store
+                .connection
+                .query_row(
+                    "SELECT outcome FROM operations WHERE request_id = 'up-1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("operation outcome");
+            assert_eq!(outcome, "failure");
+            drop(store);
+            fs::remove_dir_all(prefix).expect("remove test prefix");
+        }
     }
 }

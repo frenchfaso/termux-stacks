@@ -197,6 +197,89 @@ fn vertical_lifecycle_uses_the_fake_engine_contract() {
     assert!(daemon.terminate_and_wait().success());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cold_recovery_retries_only_a_proven_pre_engine_intent() {
+    let prefix = TestPrefix::new("recover-intent");
+    let manifest = write_fake_manifest(prefix.path(), "recover-intent");
+    let fault_dir = prepare_fault_dir(prefix.path(), &["before_intent"]);
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn_with_fault(prefix.path(), "faulted", Some(&fault_dir));
+    wait_until_ready(&mut daemon, &socket);
+
+    let mut up = spawn_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    wait_for_path(&fault_dir.join("after_intent.reached"));
+    daemon.kill_and_wait();
+    assert!(!up.wait().expect("wait for interrupted up").success());
+    let original_alias = stored_alias(prefix.path(), "recover-intent");
+
+    let mut restarted = DaemonProcess::spawn(prefix.path(), "restarted");
+    wait_until_ready(&mut restarted, &socket);
+    let recovered = run_with_prefix(prefix.path(), &["status", "recover-intent"]);
+    assert!(recovered.status.success(), "{recovered:?}");
+    assert!(text(&recovered.stdout).contains("\"service_state\": \"failed\""));
+    assert!(text(&recovered.stdout).contains("\"rootfs_state\": \"absent\""));
+
+    let retry = run_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    assert!(retry.status.success(), "{retry:?}");
+    assert!(text(&retry.stdout).contains("\"service_state\": \"running\""));
+    assert_ne!(
+        stored_alias(prefix.path(), "recover-intent"),
+        original_alias
+    );
+
+    let down = run_with_prefix(prefix.path(), &["down", "recover-intent"]);
+    assert!(down.status.success(), "{down:?}");
+    assert!(restarted.terminate_and_wait().success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cold_recovery_reuses_a_proven_installed_rootfs() {
+    let prefix = TestPrefix::new("recover-install");
+    let manifest = write_fake_manifest(prefix.path(), "recover-install");
+    let fault_dir = prepare_fault_dir(prefix.path(), &["before_intent", "after_intent"]);
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn_with_fault(prefix.path(), "faulted", Some(&fault_dir));
+    wait_until_ready(&mut daemon, &socket);
+
+    let mut up = spawn_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    wait_for_path(&fault_dir.join("after_install.reached"));
+    let installed_alias = stored_alias(prefix.path(), "recover-install");
+    daemon.kill_and_wait();
+    assert!(!up.wait().expect("wait for interrupted up").success());
+
+    let mut restarted = DaemonProcess::spawn(prefix.path(), "restarted");
+    wait_until_ready(&mut restarted, &socket);
+    let recovered = run_with_prefix(prefix.path(), &["status", "recover-install"]);
+    assert!(recovered.status.success(), "{recovered:?}");
+    assert!(text(&recovered.stdout).contains("\"service_state\": \"failed\""));
+    assert!(text(&recovered.stdout).contains("\"rootfs_state\": \"installed\""));
+
+    let retry = run_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    assert!(retry.status.success(), "{retry:?}");
+    assert_eq!(
+        stored_alias(prefix.path(), "recover-install"),
+        installed_alias
+    );
+
+    let down = run_with_prefix(prefix.path(), &["down", "recover-install"]);
+    assert!(down.status.success(), "{down:?}");
+    assert!(restarted.terminate_and_wait().success());
+}
+
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_termux-stacks")
 }
@@ -215,6 +298,69 @@ fn run_with_prefix(prefix: &Path, arguments: &[&str]) -> Output {
         .env("PREFIX", prefix)
         .output()
         .expect("run termux-stacks with PREFIX")
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_with_prefix(prefix: &Path, arguments: &[&str]) -> Child {
+    Command::new(binary())
+        .args(arguments)
+        .env("PREFIX", prefix)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn termux-stacks with PREFIX")
+}
+
+#[cfg(target_os = "linux")]
+fn write_fake_manifest(prefix: &Path, stack: &str) -> PathBuf {
+    let manifest = prefix.join(format!("{stack}.yaml"));
+    fs::write(
+        &manifest,
+        format!(
+            "apiVersion: termux-stacks/v1alpha1\nkind: Stack\nmetadata:\n  name: {stack}\nservices:\n  app:\n    image: fake:latest\n"
+        ),
+    )
+    .expect("write fake manifest");
+    manifest
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_fault_dir(prefix: &Path, continued: &[&str]) -> PathBuf {
+    let fault_dir = prefix.join("fault");
+    fs::create_dir(&fault_dir).expect("create fault directory");
+    fs::set_permissions(&fault_dir, fs::Permissions::from_mode(0o700))
+        .expect("make fault directory private");
+    for checkpoint in continued {
+        fs::write(fault_dir.join(format!("{checkpoint}.continue")), b"")
+            .expect("write checkpoint continuation");
+    }
+    fault_dir
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_path(path: &Path) {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    while !path.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "fault checkpoint did not create {}",
+            path.display()
+        );
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn stored_alias(prefix: &Path, stack: &str) -> String {
+    let connection = rusqlite::Connection::open(prefix.join("var/lib/termux-stacks/state.db"))
+        .expect("open state database");
+    connection
+        .query_row(
+            "SELECT alias FROM services WHERE stack_name = ?1",
+            [stack],
+            |row| row.get(0),
+        )
+        .expect("read stored alias")
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -278,6 +424,10 @@ struct DaemonProcess {
 
 impl DaemonProcess {
     fn spawn(prefix: &Path, label: &str) -> Self {
+        Self::spawn_with_fault(prefix, label, None)
+    }
+
+    fn spawn_with_fault(prefix: &Path, label: &str, fault_dir: Option<&Path>) -> Self {
         let fake_bin = prefix.join("bin");
         fs::create_dir_all(&fake_bin).expect("create fake engine bin directory");
         let fake_engine = fake_bin.join("proot-distro");
@@ -302,7 +452,8 @@ impl DaemonProcess {
         let stderr = prefix.join(format!("{label}.stderr"));
         let stdout_file = fs::File::create(&stdout).expect("create daemon stdout log");
         let stderr_file = fs::File::create(&stderr).expect("create daemon stderr log");
-        let child = Command::new(binary())
+        let mut command = Command::new(binary());
+        command
             .arg("daemon")
             .env("PREFIX", prefix)
             .env("TERMUX_STACKS_FAKE_STATE", &fake_state)
@@ -316,9 +467,11 @@ impl DaemonProcess {
             )
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout_file))
-            .stderr(Stdio::from(stderr_file))
-            .spawn()
-            .expect("spawn daemon");
+            .stderr(Stdio::from(stderr_file));
+        if let Some(fault_dir) = fault_dir {
+            command.env("TERMUX_STACKS_FAULT_DIR", fault_dir);
+        }
+        let child = command.spawn().expect("spawn daemon");
 
         Self {
             child: Some(child),

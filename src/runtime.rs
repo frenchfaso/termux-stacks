@@ -116,7 +116,7 @@ impl Runtime {
         let reconciled = store.reconcile_cold_start()?;
         if reconciled > 0 {
             eprintln!(
-                "termux-stacks daemon: marked {reconciled} service(s) unknown after cold start"
+                "termux-stacks daemon: reconciled {reconciled} interrupted service state(s) after cold start"
             );
         }
         Ok(Self {
@@ -172,6 +172,7 @@ impl Runtime {
         manifest: &Manifest,
     ) -> Result<StackStatus, Error> {
         self.reap_all()?;
+        fault_checkpoint("before_intent")?;
         if let Some(existing) = self.store.existing_stack(&manifest.name)? {
             if existing.source != source || existing.service_name != manifest.service.name {
                 return Err(Error::Unsupported(
@@ -185,10 +186,43 @@ impl Runtime {
                     Error::Store(crate::store::Error::NotFound(manifest.name.clone()))
                 });
             }
-            if !matches!(existing.service_state.as_str(), "stopped" | "failed") {
+            if existing.rootfs_state == "absent" && existing.service_state == "failed" {
+                let alias = generate_alias(
+                    self.store.installation_id(),
+                    &manifest.name,
+                    &manifest.service.name,
+                )?;
+                self.store
+                    .begin_retry_prepare(request_id, &manifest.name, &alias)?;
+                fault_checkpoint("after_intent")?;
+                let (stdout, stderr) = match prepare_existing_logs(
+                    &self.paths,
+                    &manifest.name,
+                    &existing.stdout_log,
+                    &existing.stderr_log,
+                ) {
+                    Ok(logs) => logs,
+                    Err(error) => {
+                        self.store.mark_failed(
+                            request_id,
+                            &manifest.name,
+                            "log_prepare",
+                            &error.to_string(),
+                            false,
+                        )?;
+                        return Err(error);
+                    }
+                };
+                self.store
+                    .set_operation_phase(request_id, "logs_prepared")?;
+                return self.install_and_start(request_id, manifest, &alias, stdout, stderr);
+            }
+            if existing.rootfs_state != "installed"
+                || !matches!(existing.service_state.as_str(), "stopped" | "failed")
+            {
                 return Err(Error::Unsupported(format!(
-                    "stack {:?} is {:?}; only a proven stopped rootfs can be reused",
-                    manifest.name, existing.service_state
+                    "stack {:?} has service state {:?} and rootfs state {:?}; only a proven stopped, installed rootfs can be reused",
+                    manifest.name, existing.service_state, existing.rootfs_state
                 )));
             }
             self.store.begin_reuse(request_id, &manifest.name)?;
@@ -223,6 +257,7 @@ impl Runtime {
             &stdout_path,
             &stderr_path,
         )?;
+        fault_checkpoint("after_intent")?;
         let (stdout, stderr) =
             match prepare_logs(&self.paths, &manifest.name, &stdout_path, &stderr_path) {
                 Ok(logs) => logs,
@@ -239,17 +274,30 @@ impl Runtime {
             };
         self.store
             .set_operation_phase(request_id, "logs_prepared")?;
+        self.install_and_start(request_id, manifest, &alias, stdout, stderr)
+    }
+
+    fn install_and_start(
+        &mut self,
+        request_id: &str,
+        manifest: &Manifest,
+        alias: &str,
+        stdout: fs::File,
+        stderr: fs::File,
+    ) -> Result<StackStatus, Error> {
         self.store
             .set_operation_phase(request_id, "install_invoked")?;
-        if let Err(error) = self.engine.install(&alias, &manifest.service.image) {
+        if let Err(error) = self.engine.install(alias, &manifest.service.image) {
             let message = error.to_string();
+            self.store.mark_rootfs_unknown(&manifest.name)?;
             self.store
                 .mark_failed(request_id, &manifest.name, "engine_install", &message, true)?;
             return Err(Error::Engine(error));
         }
         self.store.mark_installed(request_id, &manifest.name)?;
+        fault_checkpoint("after_install")?;
 
-        self.start_child(request_id, manifest, &alias, stdout, stderr)
+        self.start_child(request_id, manifest, alias, stdout, stderr)
     }
 
     fn start_child(
@@ -260,7 +308,9 @@ impl Runtime {
         stdout: fs::File,
         stderr: fs::File,
     ) -> Result<StackStatus, Error> {
-        let mut child =
+        self.store
+            .set_operation_phase(request_id, "start_invoked")?;
+        let child =
             match self
                 .engine
                 .run(alias, manifest.service.command.as_deref(), stdout, stderr)
@@ -304,6 +354,23 @@ impl Runtime {
         let boot_id = engine::boot_id()?;
         self.store
             .mark_starting(request_id, &manifest.name, pid, starttime, &boot_id)?;
+        self.children.insert(
+            manifest.name.clone(),
+            ManagedChild {
+                child,
+                starttime,
+                boot_id,
+                session_id: None,
+            },
+        );
+        fault_checkpoint("after_start")?;
+        let managed = self
+            .children
+            .remove(&manifest.name)
+            .expect("owned child inserted before checkpoint");
+        let mut child = managed.child;
+        let starttime = managed.starttime;
+        let boot_id = managed.boot_id;
 
         let deadline = Instant::now() + SESSION_TIMEOUT;
         let session_id = loop {
@@ -343,8 +410,6 @@ impl Runtime {
             thread::sleep(Duration::from_millis(50));
         };
 
-        self.store
-            .mark_running(request_id, &manifest.name, session_id)?;
         self.children.insert(
             manifest.name.clone(),
             ManagedChild {
@@ -354,6 +419,9 @@ impl Runtime {
                 session_id: Some(session_id),
             },
         );
+        fault_checkpoint("before_commit")?;
+        self.store
+            .mark_running(request_id, &manifest.name, session_id)?;
         self.status(&manifest.name)?
             .ok_or_else(|| Error::Store(crate::store::Error::NotFound(manifest.name.clone())))
     }
@@ -454,6 +522,7 @@ impl Runtime {
         }
 
         self.store.set_operation_phase(request_id, "stopping")?;
+        fault_checkpoint("during_down")?;
         if let Err(error) = self.engine.kill(session) {
             self.store
                 .mark_failed(request_id, stack, "engine_kill", &error.to_string(), true)?;
@@ -548,6 +617,27 @@ fn open_logs(stdout_path: &Path, stderr_path: &Path) -> Result<(fs::File, fs::Fi
     Ok((open_log_append(stdout_path)?, open_log_append(stderr_path)?))
 }
 
+fn open_or_create_log(path: &Path) -> Result<fs::File, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => open_log_append(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => create_log(path),
+        Err(error) => Err(Error::Io(error)),
+    }
+}
+
+fn prepare_existing_logs(
+    paths: &RuntimePaths,
+    stack: &str,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> Result<(fs::File, fs::File), Error> {
+    paths.prepare_stack_log_directory(stack)?;
+    Ok((
+        open_or_create_log(stdout_path)?,
+        open_or_create_log(stderr_path)?,
+    ))
+}
+
 fn prepare_logs(
     paths: &RuntimePaths,
     stack: &str,
@@ -590,4 +680,53 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<ExitStatus, Err
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(debug_assertions)]
+fn fault_checkpoint(name: &str) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(directory) = std::env::var_os("TERMUX_STACKS_FAULT_DIR") else {
+        return Ok(());
+    };
+    let directory = std::path::PathBuf::from(directory);
+    if !directory.is_absolute() {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_FAULT_DIR must be absolute",
+        )));
+    }
+    let metadata = fs::symlink_metadata(&directory)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_FAULT_DIR must be a private real directory",
+        )));
+    }
+    let reached = directory.join(format!("{name}.reached"));
+    let proceed = directory.join(format!("{name}.continue"));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(reached)?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !proceed.is_file() {
+        if Instant::now() >= deadline {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("fault checkpoint {name:?} timed out"),
+            )));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn fault_checkpoint(_name: &str) -> Result<(), Error> {
+    Ok(())
 }
