@@ -19,8 +19,8 @@ jobs:
 
       - name: Validate device harness syntax
         run: |
-          bash -n packaging/termux/build.sh.fixture
-          bash -n tests/device/lib.sh tests/device/s0.sh tests/device/s1.sh tests/device/s2.sh tests/device/s3.sh tests/device/s4.sh tests/device/s5.sh tests/device/g2.sh
+          bash -n packaging/termux/build.sh.fixture packaging/termux/materialize-g3-recipe.sh
+          bash -n tests/device/lib.sh tests/device/s0.sh tests/device/s1.sh tests/device/s2.sh tests/device/s3.sh tests/device/s4.sh tests/device/s5.sh tests/device/g2.sh tests/device/g3.sh
           dash -n tests/device/fixtures/s1/probe tests/device/fixtures/s2/worker tests/device/fixtures/s3/worker tests/device/fixtures/g2/worker
           bash -n tests/device/fixtures/s2/verify-oci.sh tests/device/fixtures/s3/verify-oci.sh tests/device/fixtures/s4/verify-oci.sh tests/device/fixtures/s5/verify-oci.sh tests/device/fixtures/g2/verify-oci.sh
           python3 -m py_compile tests/device/fixtures/s4/slow_http.py tests/device/fixtures/s5/protocol_probe.py

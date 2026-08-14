@@ -12,14 +12,18 @@ engine dependency is pinned to `proot-distro 5.6.0` because the runtime
 capability probe accepts exactly that qualified version.
 
 The fixture's `prerm` acts only on an actual package removal. It disables and
-stops the fixed `termux-stacksd` runit service and removes that package-owned
-service directory. It deliberately does nothing during an upgrade, so an
-upgrade neither restarts the daemon nor changes runtime state. The state
-database, logs, volumes and PRoot root filesystems are never package-owned
-removal targets. For Debian output the generated guard accepts only the
-`remove` action. For Pacman output the Termux builder converts the same script
-to `pre_remove`, so the generated body is unconditional and cannot run during
-an upgrade.
+stops the fixed `termux-stacksd` runit service but retains the Termux-managed
+service conffiles. The `down` file therefore prevents runit from retrying a
+removed binary, while an ordinary reinstall can restore the service without
+`--force-confmiss`. It deliberately does nothing during an upgrade, so an
+upgrade neither restarts the daemon nor changes runtime state. A guarded
+Debian `postrm purge` removes only the fixed service directory. Pacman has no
+purge-only hook, so its generated `post_remove` deliberately leaves any runit
+residue and `.pacsave` files intact. The state database, logs, volumes and
+PRoot root filesystems are never package-owned removal or purge targets. For
+Debian output the generated guards distinguish `remove` and `purge`. For
+Pacman output the Termux builder maps the disabling script to `pre_remove`;
+neither generated body can run during an upgrade.
 
 ## G3 canonical build
 
@@ -43,7 +47,10 @@ Accept the outputs only after all four architectures are present, the package
 metadata and file list are exact, the service is disabled by default, and each
 ELF dependency is provided by a declared runtime package. The release gate
 must also inspect the binary for test hooks and run the install, live-upgrade,
-disabled-upgrade, and removal matrix on Android.
+disabled-upgrade, ordinary remove/reinstall, and explicit final-purge matrix on
+Android. Ordinary removal must retain a disabled conffile skeleton; purge must
+remove only that fixed service directory and preserve every runtime-state
+path.
 
 ## S0 on-device fallback
 

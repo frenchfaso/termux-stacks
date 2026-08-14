@@ -464,3 +464,164 @@ process tree seeded from the daemon, engine sessions, and persisted child
 identities. Command arguments are allowlist-redacted: paths, values, and
 unknown executable names are never written verbatim. An evidence capture is
 read-only and never expands the set of processes eligible for signaling.
+
+## G3 — Package-manager acceptance
+
+G3 exercises two already-built local `.deb` artifacts through the real Termux
+package database and the fixed `termux-stacksd` runit service. Unlike S0–G2,
+this harness intentionally changes the device's installed packages. It does
+not build packages, download dependencies, access an OCI runtime, create a
+release, or qualify the other three package architectures.
+
+### Destructive-scope prerequisites
+
+Run G3 only on a disposable or deliberately cleared Termux installation. The
+harness refuses to perform its first package operation unless all of these are
+true:
+
+- `termux-stacks` has no package-database record;
+- `$PREFIX/bin/termux-stacks`, the `termux-stacksd` service directory, and
+  `$PREFIX/var/run/termux-stacks` are absent; the durable-state directory is
+  either absent or a real, mode-0700 empty directory;
+- `libsqlite`, `proot-distro` exactly 5.6.0, `termux-services`, and `runit` are
+  already in the configured state, and `dpkg --audit` is empty;
+- `service-daemon` has been started by restarting the Termux shell after the
+  first `termux-services` installation;
+- both inputs are absolute, non-symlink `.deb` files for the device
+  architecture, the old package version sorts before the new one, and both
+  release ELFs pass the layout/dependency inspection. The old candidate must
+  implement protocol 1/schema 2; the new candidate must implement protocol
+  2/schema 3.
+
+The old side is not an arbitrary rebuild. Its repository-owned trust roots are
+the S5 package from source
+`1e0c34d2a4498c9f5660662f0dc008aefe1921ab`, package SHA-256
+`dd09f17ba225700ce1a18a8477efd67117a42963f4f4f7ee757151d663e4f9b8`,
+and extracted release ELF SHA-256
+`78620c23c17d1deb97d0ed7030e47dbf75a2a4732f8eb8bfb7fdbf6fe2b7fc37`.
+Preflight requires both hashes exactly. The dynamic schema and protocol checks
+then prove that the transferred artifact still has the expected v1/v2
+behavior; a version label alone is not accepted as provenance.
+
+The explicit acknowledgement is mandatory:
+
+```bash
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/g3.sh \
+  --old-deb "$HOME/packages/termux-stacks-old.deb" \
+  --new-deb "$HOME/packages/termux-stacks-new.deb" \
+  --accept-package-manager-changes \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+The harness snapshots both artifacts into its private runtime before the
+preflight and records their SHA-256 values. Review those values against the
+four-architecture build ledger before accepting a run. Inputs are never
+modified. Normal lifecycle operations use scripted `apt-get`, because G3 must
+exercise the dependency resolver used for local package installation rather
+than bypass dependency resolution and the user-facing lifecycle with
+`dpkg -i`. Before every effect, `apt-get --simulate` must show a plan containing
+only `termux-stacks`. Installs use `--no-install-recommends --no-remove` and an
+exact absolute local artifact; `--allow-downgrades` permits the deliberate old
+package replay after a newer residual conffile record. Ordinary removals and
+the final purge use `--no-auto-remove`. The installed version and ELF hash are
+checked after every install or upgrade. Already configured dependencies
+therefore remain under APT control without authorizing another package change.
+The harness never updates indexes, installs a dependency, repairs unrelated
+package state, or falls back to a raw `dpkg` mutation. Each real APT effect is
+also bracketed by a sorted inventory of the complete dpkg database; removing
+the exact `termux-stacks` row must leave those inventories byte-identical.
+Local installs additionally use `--no-download`. Any unrelated package change
+fails the gate and stops further lifecycle effects.
+
+Ordinary `apt-get remove` intentionally exercises Debian conffile behavior: it
+must leave `deinstall ok config-files` and the fixed disabled service skeleton,
+while removing the executable and stopping any qualified daemon. Only after
+both ordinary-removal and reinstall cases pass does the exit handler authorize
+one simulated, exact-package `apt-get purge termux-stacks`. Any earlier failure
+preserves the package record and durable state for review instead of purging.
+
+### Package and lifecycle matrix
+
+Before installation, each artifact is extracted without executing its
+maintainer scripts. Static checks require the one public executable, the
+Apache-2.0 license link, the disabled runit layout, the three declared runtime
+dependencies, a stripped architecture-matched PIE, and exactly
+`libc.so`, `libdl.so`, and `libsqlite3.so` as dynamic dependencies. Package
+data must not own the durable or ephemeral runtime directories. The canonical
+Apache-2.0 payload is the exact
+`share/doc/termux-stacks/copyright -> ../../LICENSES/Apache-2.0.txt` symlink.
+The historical old artifact must declare
+`libsqlite, proot-distro (>= 5.6.0), termux-services` exactly; the new package
+must replace that historical range with the release pin
+`proot-distro (= 5.6.0)`.
+The service files must be the exact conffile set. The new package must contain
+a removal-only `prerm` that disables the fixed service without deleting it and
+a purge-only `postrm` that deletes only that fixed service directory; neither
+hook may name durable or ephemeral runtime state. Install hooks are rejected.
+
+The acceptance sequence is:
+
+1. fresh-install the old package and prove the service is disabled, no daemon
+   ran, and `dpkg --verify` is clean;
+2. create one random, fsynced marker in the otherwise empty durable-state
+   directory;
+3. explicitly start the old daemon, require a valid schema-2 database, record
+   its installation ID, then disable and stop it;
+4. upgrade old to new while disabled and prove that no daemon starts, schema 2
+   and the installation ID remain unchanged, and no maintainer script performs
+   the migration;
+5. explicitly start the new daemon, require transactional migration to schema
+   3 with the same installation ID and marker, verify status, then stop it;
+6. ordinarily remove the disabled package and prove
+   `deinstall ok config-files`: the executable and socket are gone, the exact
+   disabled service skeleton remains, and the byte-identical schema-3 database
+   and marker survive;
+7. after that preservation proof, remove only the exact harness-owned SQLite
+   database allowlist while retaining the marker, then reinstall the old
+   package disabled;
+8. enable the old service again, require a fresh schema-2 database, and qualify
+   its boot ID, PID, start time, executable inode, argv, socket, marker, and
+   new installation ID;
+9. upgrade to the new package while live, then require the same old daemon
+   identity for five seconds, continued enablement, and schema 2. The new
+   protocol-2 CLI must exit nonzero with empty stdout and exactly
+   `termux-stacks status: unsupported protocol version 1; expected 2`;
+10. run the documented `sv restart termux-stacksd` remediation, require a new
+    PID executing the installed new ELF, migrate to schema 3 with the same
+    installation ID, and verify that the new CLI status succeeds;
+11. ordinarily remove the enabled live package and require that the qualified
+    daemon, socket, and binary disappear, the package enters
+    `deinstall ok config-files`, the exact disabled service skeleton remains,
+    and the byte-identical migrated database and marker survive;
+12. reinstall the new package from that conffile state without
+    `--force-confmiss`, and prove it is disabled without changing the preserved
+    schema-3 state.
+
+After step 12 authorizes final cleanup, the exit handler simulates and performs
+one exact disabled purge. It proves that the package record and fixed service
+directory disappear while the database and marker remain byte-identical.
+Only then may it delete its marker, SQLite's known `state.db` files, and the
+known daemon lock/socket after the qualified daemon has drained. It uses
+`rmdir` only for a state directory created by this run and for its exact empty
+runtime directory. A pre-existing empty mode-0700 state directory is retained
+and restored empty. An unknown file, directory, symlink, process identity,
+package state, or service residue fails cleanup and is preserved for review;
+cleanup never broadens a path or process target. Before step 12, the purge and
+all harness-owned state deletion remain unauthorized.
+
+### Evidence and limits
+
+The evidence bundle includes artifact control metadata and contents, extracted
+layout inventories, ELF reports, package-manager stdout/stderr, every durable
+intent, service-status snapshots, schema/version/integrity/installation-ID
+snapshots, byte-hashed before/after state inventories, the simulated and actual
+final purge output, the matrix, cleanup results, and a final `SHA256SUMS`. A
+reviewer must run
+`sha256sum -c SHA256SUMS` and compare the package hashes with the immutable G3
+artifact ledger.
+
+This one-device run qualifies Debian package lifecycle and runit behavior for
+aarch64 only. The clean, pinned `termux-packages` builds for
+`aarch64`, `arm`, `i686`, and `x86_64`, their artifact hashes and sizes, and
+the immutable release archive remain separate G3 evidence.
