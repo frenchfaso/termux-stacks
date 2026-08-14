@@ -1,129 +1,132 @@
-# Architettura di Termux Stacks
+# Termux Stacks Architecture
 
-**Stato:** proposta v0.1; S0–S3 completati, spike S4 aperto
-**Target:** Termux/Android senza root
-**Baseline engine verificata:** `proot-distro 5.6.0`
-**Autorità:** componenti interni, persistenza e recovery
+**Status:** v0.1 proposal; S0–S3 completed, S4 spike open
+**Target:** Termux/Android without root access
+**Verified engine baseline:** `proot-distro 5.6.0`
+**Authority:** internal components, persistence, and recovery
 
-## 1. Criterio di progetto
+## 1. Design criterion
 
-L'architettura ottimizza per affidabilità e comprensibilità su un singolo
-telefono, non per scalabilità teorica. Ogni componente deve giustificare una
-failure mode reale già osservata.
+The architecture optimizes for reliability and comprehensibility on a single
+phone, not for theoretical scalability. Every component must justify a real,
+already observed failure mode.
 
-Regole:
+Rules:
 
-1. un processo e una fonte di verità prima di introdurre coordinamento;
-2. serializzare prima di parallelizzare;
-3. delegare all'engine ciò che l'engine sa già fare;
-4. persistere intent prima degli effetti esterni;
-5. non automatizzare quando l'osservazione è ambigua;
-6. nessuna astrazione pubblica per funzioni differite.
+1. use one process and one source of truth before introducing coordination;
+2. serialize before parallelizing;
+3. delegate to the engine what the engine already knows how to do;
+4. persist intent before external effects;
+5. do not automate when observation is ambiguous;
+6. provide no public abstraction for deferred features.
 
-## 2. Decisioni congelate
+## 2. Frozen decisions
 
-- Un solo eseguibile pubblico Rust: `termux-stacks`.
-- Un solo package/crate iniziale; i confini sono moduli Rust.
-- Un solo demone globale, `termux-stacks daemon`, foreground sotto runit.
-- `termux-stacksd` è il service ID runit, non un artefatto binario.
-- CLI a vita breve e socket Unix locale.
-- Una coda globale FIFO per tutte le mutazioni.
-- SQLite è l'unica fonte di verità transazionale.
-- Un lock file advisory tenuto aperto rende il demone singleton; il socket è
-  soltanto IPC. Non esistono lock per stack.
-- `proot-distro` è accessibile soltanto attraverso un adapter.
-- Un rootfs scrivibile distinto per servizio.
-- Cold recovery: stop/recreate soltanto con evidenza sufficiente; altrimenti
-  `unknown` con diagnostica operativa.
-- Implementazione sincrona; un runtime async richiede misure e un ADR.
+- A single public Rust executable: `termux-stacks`.
+- A single initial package/crate; boundaries are Rust modules.
+- A single global daemon, `termux-stacks daemon`, running in the foreground
+  under runit.
+- `termux-stacksd` is the runit service ID, not a binary artifact.
+- A short-lived CLI and a local Unix socket.
+- One global FIFO queue for all mutations.
+- SQLite is the sole transactional source of truth.
+- An advisory lock file held open makes the daemon a singleton; the socket is
+  IPC only. There are no per-stack locks.
+- `proot-distro` is accessible only through an adapter.
+- A separate writable rootfs for each service.
+- Cold recovery: stop/recreate only with sufficient evidence; otherwise use
+  `unknown` with operational diagnostics.
+- Synchronous implementation; an async runtime requires measurements and an
+  ADR.
 
-## 3. Contesto
+## 3. Context
 
 ```text
-CLI breve
-   │ JSON locale, versione esatta
+short-lived CLI
+   │ local JSON, exact version
    ▼
 termux-stacks daemon ───────────── runit
    ├── command queue (single writer)
    ├── manifest
    ├── SQLite: desired + operations
-   ├── supervisor in-process
+   ├── in-process supervisor
    └── adapter proot-distro
-          ├── rootfs service A ── processo/log
-          └── rootfs service B ── processo/log
+          ├── service A rootfs ── process/log
+          └── service B rootfs ── process/log
 ```
 
-Tutto vive nello stesso UID Android. Il diagramma mostra ownership software,
-non isolamento kernel.
+Everything runs under the same Android UID. The diagram shows software
+ownership, not kernel isolation.
 
-## 4. Struttura del codice
+## 4. Code structure
 
 ```text
 src/
-├── main.rs       # dispatch CLI/daemon
-├── cli.rs        # argomenti e output
-├── manifest.rs   # parse e validate
-├── protocol.rs   # tipi IPC e framing
-├── daemon.rs     # accept loop e coda mutazioni
-├── store.rs      # SQLite e migrazioni
-├── engine.rs     # trait + adapter proot-distro
-├── supervisor.rs # child, log, exit e restart
-├── reconcile.rs  # startup e recovery
-└── paths.rs      # layout sotto PREFIX
+├── main.rs       # CLI/daemon dispatch
+├── cli.rs        # arguments and output
+├── manifest.rs   # parsing and validation
+├── protocol.rs   # IPC types and framing
+├── daemon.rs     # accept loop and mutation queue
+├── store.rs      # SQLite and migrations
+├── engine.rs     # trait + proot-distro adapter
+├── supervisor.rs # child, log, exit, and restart
+├── reconcile.rs  # startup and recovery
+└── paths.rs      # layout under PREFIX
 ```
 
-Non si creano crate `domain`, `planner`, `control-plane`, `storage` o
-`xtask` finché un confine non richiede build, dipendenze o ownership
-indipendenti.
+Do not create `domain`, `planner`, `control-plane`, `storage`, or `xtask`
+crates until a boundary requires independent builds, dependencies, or
+ownership.
 
-## 5. CLI e protocollo
+## 5. CLI and protocol
 
-`config validate` opera localmente. Tutte le letture runtime e le mutazioni
-passano dal demone; la CLI non apre SQLite e non avvia workload.
+`config validate` runs locally. All runtime reads and mutations go through the
+daemon; the CLI does not open SQLite and does not start workloads.
 
-Il protocollo v0 usa request/response JSON Lines su socket Unix:
+The v0 protocol uses request/response JSON Lines over a Unix socket:
 
-- un oggetto JSON per riga, massimo 1 MiB;
-- `protocol_version` esatta in ogni richiesta;
-- `request_id` univoco per deduplicare retry;
-- un solo risultato finale, senza streaming o cursor;
-- incompatibilità di versione = errore con istruzione di riavviare il servizio.
+- one JSON object per line, at most 1 MiB;
+- an exact `protocol_version` in every request;
+- a unique `request_id` to deduplicate retries;
+- one final result, with no streaming or cursors;
+- version incompatibility = an error instructing the user to restart the
+  service.
 
-Non esistono negotiation range, subscription, backpressure o API remota.
-Il daemon già in esecuzione può essere più vecchio del nuovo binario dopo un
-upgrade: la versione esatta impedisce che CLI e demone incompatibili
-proseguano silenziosamente.
+There are no negotiation ranges, subscriptions, backpressure, or remote APIs.
+After an upgrade, the already running daemon may be older than the new binary:
+the exact version prevents incompatible CLI and daemon versions from
+continuing silently.
 
-## 6. Demone e concorrenza
+## 6. Daemon and concurrency
 
-All'avvio il demone:
+At startup, the daemon:
 
-1. calcola i path dal prefix;
-2. prepara i path senza seguire symlink;
-3. acquisisce il lock advisory non bloccante del demone;
-4. recupera un eventuale socket stale e binda il socket, senza accettare
-   richieste;
-5. apre SQLite e accetta solo la versione schema esatta;
-6. esegue capability probe dell'engine;
-7. riconcilia operazioni incomplete;
-8. accetta richieste.
+1. derives paths from the prefix;
+2. prepares paths without following symlinks;
+3. acquires the daemon's non-blocking advisory lock;
+4. recovers any stale socket and binds the socket, without accepting requests;
+5. opens SQLite and accepts only the exact schema version;
+6. performs the engine capability probe;
+7. reconciles incomplete operations;
+8. accepts requests.
 
-Il lock è rilasciato dal kernel alla chiusura del file descriptor, incluso il
-crash. Il file può restare sul disco e non contiene stato autorevole. Solo chi
-possiede il lock può sostituire un socket stale: il bind del socket da solo
-non è un algoritmo di elezione sicuro.
+The kernel releases the lock when the file descriptor is closed, including
+after a crash. The file may remain on disk and contains no authoritative
+state. Only the lock holder may replace a stale socket: binding the socket
+alone is not a safe election algorithm.
 
-La mutazione corrente è l'unico writer logico. Read e raccolta di exit status
-possono usare thread limitati, ma ogni modifica allo stato rientra nella coda.
-SQLite non rimane mai in transazione durante install, run, kill o I/O lungo.
+The current mutation is the only logical writer. Reads and exit-status
+collection may use a limited number of threads, but every state change returns
+to the queue. SQLite is never left in a transaction during install, run, kill,
+or lengthy I/O.
 
-Il demone riceve SIGTERM da runit, smette di accettare mutazioni, registra lo
-shutdown e termina i workload secondo policy. Un kill -9 viene gestito solo al
-riavvio.
+The daemon receives SIGTERM from runit, stops accepting mutations, records the
+shutdown, and terminates workloads according to policy. A kill -9 is handled
+only on restart.
 
-## 7. Persistenza
+## 7. Persistence
 
-Layout minimo:
+Minimal layout:
 
 ```text
 $PREFIX/
@@ -137,238 +140,243 @@ $PREFIX/
 └── var/service/termux-stacksd/
 ```
 
-`state.db` contiene concettualmente:
+Conceptually, `state.db` contains:
 
-- `meta`: schema e installation ID;
-- `stacks`: desired state, manifest accettato, revisione committed;
-- `services`: alias engine, rootfs generation, stato e ultimo exit;
-- `operations`: request ID, intent, fase e outcome.
+- `meta`: schema and installation ID;
+- `stacks`: desired state, accepted manifest, committed revision;
+- `services`: engine alias, rootfs generation, state, and last exit;
+- `operations`: request ID, intent, phase, and outcome.
 
-Queste quattro tabelle sono un punto di partenza, non uno schema pubblico.
-`operations` è il journal. Non esistono journal file, snapshot, `current`,
-event store o compaction separati.
+These four tables are a starting point, not a public schema. `operations` is
+the journal. There are no separate journal files, snapshots, `current`, event
+stores, or compaction.
 
-Prima del primo upgrade di formato supportato, il daemon crea solo database
-vuoti e non modifica uno schema sconosciuto: conserva il file e termina con
-diagnostica. Un framework di migrazione verrà introdotto soltanto quando
-esisterà una migrazione reale da supportare.
+Before the first supported format upgrade, the daemon creates only empty
+databases and does not modify an unknown schema: it preserves the file and
+exits with diagnostics. A migration framework will be introduced only when
+there is an actual migration to support.
 
-Durabilità iniziale:
+Initial durability:
 
-- transazioni SQLite e foreign key abilitate;
-- binding, journal mode e `synchronous` scelti dallo spike su filesystem
-  Termux;
-- intent committato prima di ogni effetto;
-- outcome committato dopo aver osservato l'effetto;
-- errore storage/full trattato prima di proseguire.
+- SQLite transactions and foreign keys enabled;
+- bindings, journal mode, and `synchronous` selected by the spike on the
+  Termux filesystem;
+- intent committed before every effect;
+- outcome committed after observing the effect;
+- storage/full errors handled before proceeding.
 
-## 8. Contratto engine
+## 8. Engine contract
 
-L'adapter usa soltanto i comandi pubblici `proot-distro` e non legge o
-modifica direttamente i suoi moduli Python, database o rootfs internals.
+The adapter uses only public `proot-distro` commands and does not directly
+read or modify its Python modules, databases, or rootfs internals.
 
-Operazioni v0:
+v0 operations:
 
 - capability probe;
-- install di immagine/archive con alias;
-- run foreground;
-- list/ps delle sessioni;
-- kill per session identifier esatto emesso da `proot-distro ps`, soltanto
-  dopo la qualificazione di identità e ownership S3;
+- image/archive installation with an alias;
+- foreground run;
+- session list/ps;
+- kill by the exact session identifier emitted by `proot-distro ps`, only
+  after the S3 identity and ownership qualification;
 
-`--detach` è vietato: scarta stdio e sottrae il processo alla supervisione
-diretta. L'adapter deve catturare stdout, stderr ed exit status.
+`--detach` is prohibited: it discards stdio and removes the process from
+direct supervision. The adapter must capture stdout, stderr, and exit status.
 
-Il profilo v0 avvia workload con:
+The v0 profile starts workloads with:
 
 ```text
 proot-distro run --isolated [--env K=V] [--bind SRC:DEST] ALIAS [-- ARG...]
 ```
 
-L'adapter costruisce un vettore argv, mai una command string. Se `command` è
-assente omette `--`; se è presente passa almeno un argomento dopo un solo
-`--`. `--isolated` è il default e vengono riaggiunti soltanto i bind
-dichiarati; shared home, shared tmp e X11 non sono impliciti. `--minimal` è
-fuori da v0 finché non supera uno spike dedicato. `login` e `--detach` non
-avviano workload production.
+The adapter builds an argv vector, never a command string. If `command` is
+absent, it omits `--`; if it is present, it passes at least one argument after
+exactly one `--`. `--isolated` is the default, and only declared binds are
+added back; shared home, shared tmp, and X11 are not implicit. `--minimal` is
+outside v0 until it passes a dedicated spike. `login` and `--detach` do not
+start production workloads.
 
-### 8.1 Session registry qualificato
+### 8.1 Qualified session registry
 
-S2 ha confermato che il registry delle sessioni engine è best effort. Una
-registrazione negata, una lettura negata e un record JSON malformed possono
-tutti produrre `ps --quiet` vuoto con exit 0 mentre il processo osservato
-indipendentemente è vivo. La tabella completa è output umano su stderr; non è
-un protocollo stabile. `--quiet` espone soltanto il PID registrato, che è un
-session identifier dell'engine e non autorizza da solo un segnale host.
+S2 confirmed that the engine session registry is best effort. Denied
+registration, denied reads, and a malformed JSON record can all produce empty
+`ps --quiet` output with exit 0 while the independently observed process is
+alive. The full table is human-readable output on stderr; it is not a stable
+protocol. `--quiet` exposes only the registered PID, which is an engine
+session identifier and does not by itself authorize a host signal.
 
-Nel demone vivo, il child handle con `boot_id`, PID e `/proc` start time è
-l'evidenza primaria; una riga positiva del registry è complementare. Dopo un
-crash del demone l'handle è perduto: registry empty, errore di osservazione o
-record malformed significano `unknown`, mai `absent`. v0 non avvia, ricrea o
-cancella automaticamente quel servizio. Anche una riga positiva resta solo
-evidenza complementare e non ricostruisce da sola l'ownership dopo il crash.
+While the daemon is alive, the child handle with `boot_id`, PID, and `/proc`
+start time is the primary evidence; a positive registry row is complementary.
+After a daemon crash, the handle is lost: an empty registry, an observation
+error, or a malformed record means `unknown`, never `absent`. v0 does not
+automatically start, recreate, or delete that service. Even a positive row
+remains only complementary evidence and does not reconstruct ownership by
+itself after a crash.
 
-`run CONTAINER -- ARGS` conserva Entrypoint, sostituisce Cmd e non aggiunge
-una shell. `login -- COMMAND` avvolge invece il comando nella shell
-configurata dell'utente con `-c`; non è il percorso runtime. L'adapter non
-inventa un raw exec generico: supporta la semantica verificata e rifiuta il
-resto.
+`run CONTAINER -- ARGS` preserves Entrypoint, replaces Cmd, and does not add a
+shell. By contrast, `login -- COMMAND` wraps the command in the user's
+configured shell with `-c`; it is not the runtime path. The adapter does not
+invent a generic raw exec: it supports the verified semantics and rejects the
+rest.
 
-S3 ha qualificato un'unica strategia v0:
+S3 qualified a single v0 strategy:
 
 ```text
 proot-distro kill SESSION_PID
 ```
 
-Il target è il session identifier esatto già osservato e persistito nella
-stessa generazione del demone. Non viene mai passato a `kill(2)`, non viene
-sostituito dall'alias e non si usa `--all`.
-Il comando engine propaga TERM al tree, attende la propria grace fissa e fa
-escalation; tramite gli holder del record ereditato raggiunge anche guest
-rimasti dopo il SIGKILL del tracer PRoot e discendenti che hanno cambiato
-PGID/SID. Lo spike ha inoltre provato che un TERM al solo PGID è insufficiente
-e che il target esatto non ferma una seconda sessione sullo stesso alias.
+The target is the exact session identifier already observed and persisted
+during the same daemon generation. It is never passed to `kill(2)`, never
+replaced with the alias, and `--all` is never used.
+The engine command propagates TERM to the tree, waits for its fixed grace
+period, and escalates; through the inherited record holders, it also reaches
+guests left alive after the PRoot tracer receives SIGKILL and descendants that
+have changed PGID/SID. The spike also proved that sending TERM only to the
+PGID is insufficient and that the exact target does not stop a second session
+on the same alias.
 
-L'exit status del comando non prova da solo lo stop: servono precondizioni di
-ownership e l'osservazione disponibile. Se una di esse si perde, l'outcome è
-`unknown` e non esiste fallback a segnali host. La grace engine è best effort
-e non configurabile; v0.1 non espone `stopGracePeriod`.
+The command's exit status alone does not prove that the workload stopped:
+ownership preconditions and the available observation are required. If either
+is lost, the outcome is `unknown`, and there is no fallback to host signals.
+The engine grace period is best effort and not configurable; v0.1 does not
+expose `stopGracePeriod`.
 
-## 9. Identità e ownership
+## 9. Identity and ownership
 
-Ogni installazione genera un installation ID casuale. Ogni tentativo di creare
-un rootfs usa un alias non riutilizzabile:
+Each installation generates a random installation ID. Every attempt to create
+a rootfs uses a non-reusable alias:
 
 ```text
 txs-<installation-short>-<stack-short>-<service-short>-<random>
 ```
 
-L'intent con alias viene committato prima di invocare l'engine. Un prefisso da
-solo non prova ownership e un alias incompleto non viene cancellato
-automaticamente.
+The intent containing the alias is committed before invoking the engine. A
+prefix alone does not prove ownership, and an incomplete alias is not deleted
+automatically.
 
-Per un processo servono almeno alias engine, PID osservato, start time quando
-disponibile e boot identity. Un PID salvato non autorizza da solo un segnale.
-Il child handle è primario finché appartiene al demone corrente; `ps` engine è
-complementare e un risultato vuoto non prova mai l'assenza.
+A process requires at least the engine alias, observed PID, start time when
+available, and boot identity. A saved PID alone does not authorize a signal.
+The child handle is primary while it belongs to the current daemon; engine
+`ps` is complementary, and an empty result never proves absence.
 
-## 10. Lifecycle di un servizio
+## 10. Service lifecycle
 
 ### Prepare
 
-Questa procedura viene eseguita soltanto se il rootfs manca o cambia
-l'immagine. Un restart riusa il rootfs registrato.
+This procedure runs only if the rootfs is missing or the image changes. A
+restart reuses the registered rootfs.
 
-1. valida manifest e capability;
-2. genera alias non riutilizzabile;
-3. inserisce operation `PREPARE`;
-4. invoca install;
-5. osserva successo e registra il rootfs.
+1. validate the manifest and capabilities;
+2. generate a non-reusable alias;
+3. insert a `PREPARE` operation;
+4. invoke install;
+5. observe success and register the rootfs.
 
-Un crash fra 3 e 5 lascia un'operazione incompleta. La recovery classifica
-l'artefatto `absent | owned | ambiguous` e non lo cancella nel terzo caso.
+A crash between steps 3 and 5 leaves an incomplete operation. Recovery
+classifies the artifact as `absent | owned | ambiguous` and does not delete it
+in the third case.
 
 ### Start
 
-1. registra `START_NEW`;
-2. apre il file log;
-3. avvia `proot-distro run --isolated` foreground con argv distinti;
-4. cattura stdout/stderr separati, exit status e child/session evidence;
-5. considera il servizio `running` quando il processo principale è
-   osservato vivo;
-6. committa la revisione quando tutti i servizi sono running.
+1. record `START_NEW`;
+2. open the log file;
+3. start `proot-distro run --isolated` in the foreground with separate argv
+   entries;
+4. capture stdout/stderr separately, exit status, and child/session evidence;
+5. consider the service `running` when the main process is observed alive;
+6. commit the revision when all services are running.
 
-La readiness applicativa è fuori v0.1.
+Application readiness is outside v0.1.
 
 ### Stop
 
-L'adapter prova il percorso engine verificato dallo spike e attende la sua
-escalation. Se non può provare l'identità, marca `unknown` e non invia segnali
-a PID host potenzialmente riciclati. L'utente riceve una diagnosi e una
-procedura manuale.
+The adapter attempts the engine path verified by the spike and waits for its
+escalation. If it cannot prove identity, it marks the service `unknown` and
+does not send signals to potentially recycled host PIDs. The user receives a
+diagnosis and a manual procedure.
 
 ## 11. Reconciliation
 
-All'avvio:
+At startup:
 
-1. legge revisione committed, desired state e operazioni incomplete;
-2. interroga child/session evidence disponibile;
-3. classifica la sessione `absent | active | ambiguous`;
-4. per `desired=stopped`, ferma solo target con ownership sufficiente;
-5. per `desired=running`, riavvia solo dopo aver escluso un duplicato;
-6. in caso ambiguo usa `unknown` con diagnostica operativa;
-7. non rimuove rootfs automaticamente.
+1. read the committed revision, desired state, and incomplete operations;
+2. query the available child/session evidence;
+3. classify the session as `absent | active | ambiguous`;
+4. for `desired=stopped`, stop only targets with sufficient ownership;
+5. for `desired=running`, restart only after ruling out a duplicate;
+6. if ambiguous, use `unknown` with operational diagnostics;
+7. do not remove rootfs instances automatically.
 
-La strategia v0.1 è stop-and-recreate quando l'identità è provata, non
-adozione. S2 ha dimostrato che il session registry può fallire senza segnale
-osservabile: l'auto-restart dopo crash del demone resta disabilitato.
-L'operatore riceve `unknown` e una diagnostica; non viene creato un possibile
-duplicato.
+The v0.1 strategy is stop-and-recreate when identity is proven, not adoption.
+S2 demonstrated that the session registry can fail without an observable
+signal: automatic restart after a daemon crash remains disabled. The operator
+receives `unknown` and diagnostics; a possible duplicate is not created.
 
 ## 12. Update
 
-`up` con manifest cambiato usa:
+`up` with a changed manifest uses:
 
 ```text
 PREPARE -> STOP_OLD -> START_NEW -> COMMIT
 ```
 
-Non è una transazione atomica. È consentito downtime. Se START_NEW fallisce,
-si tenta di riavviare l'ultima revisione committed sul suo rootfs ancora
-presente. Non esistono rollback pubblico, data migration o GC automatico in
-v0.1; rootfs ritirati restano per cleanup manuale.
+This is not an atomic transaction. Downtime is allowed. If START_NEW fails,
+the daemon attempts to restart the last committed revision on its still
+present rootfs. v0.1 has no public rollback, data migration, or automatic GC;
+retired rootfs instances remain for manual cleanup.
 
-## 13. Networking e mount
+## 13. Networking and mounts
 
-Il demone controlla conflitti fra manifest e prova best effort se una porta è
-libera prima dell'avvio. Non mantiene socket lease e non attribuisce ownership
-del listener. Una race fra preflight e bind resta possibile.
+The daemon checks for conflicts between manifests and makes a best-effort
+check that a port is available before startup. It does not hold socket leases
+or attribute ownership of the listener. A race between preflight and bind
+remains possible.
 
-I mount sono passati come bind pubblici dell'engine. Il daemon canonicalizza
-i path host, vieta destinazioni sovrapposte e non promette read-only.
+Mounts are passed as public engine binds. The daemon canonicalizes host paths,
+prohibits overlapping destinations, and does not promise read-only behavior.
 
-## 14. Runit e Android
+## 14. Runit and Android
 
-La recipe installa un solo servizio:
+The recipe installs a single service:
 
 ```sh
 exec "$PREFIX/bin/termux-stacks" daemon 2>&1
 ```
 
-Il file `down` lo lascia disabilitato. L'utente usa
-`sv-enable termux-stacksd`; l'abilitazione non viene eseguita da post-install.
+The `down` file leaves it disabled. The user runs
+`sv-enable termux-stacksd`; post-install does not enable it.
 
-Termux:Boot è opzionale ed esegue script one-shot. La configurazione
-raccomandata avvia l'infrastruttura `termux-services`, non Termux Stacks
-direttamente. Dopo un force-stop Android nessun componente può riavviarsi
-finché l'utente non riapre Termux. Reboot, Doze e kill OEM restano best effort.
+Termux:Boot is optional and runs one-shot scripts. The recommended
+configuration starts the `termux-services` infrastructure, not Termux Stacks
+directly. After an Android force-stop, no component can restart until the user
+reopens Termux. Reboots, Doze, and OEM kills remain best effort.
 
-## 15. Sicurezza
+## 15. Security
 
-Socket, database, log e volumi devono essere privati all'UID Termux. Il demone
-non accetta path in shared storage per il proprio stato e non ascolta su TCP.
+The socket, database, logs, and volumes must be private to the Termux UID. The
+daemon does not accept shared-storage paths for its state and does not listen
+on TCP.
 
-I workload sono fidati e possono vedere risorse dello stesso UID. v0.1 non
-accetta secret come feature: `--env VALUE` può apparire negli argv e i bind
-file non costituiscono isolamento dal workload.
+Workloads are trusted and can see resources belonging to the same UID. v0.1
+does not support secrets as a feature: `--env VALUE` may appear in argv, and
+file binds do not isolate data from the workload.
 
-## 16. Evoluzioni differite
+## 16. Deferred evolutions
 
-Richiedono evidenza e ADR separati:
+These require separate evidence and ADRs:
 
-- più writer o mutazioni concorrenti;
-- runtime async;
-- split in più crate o runner separato;
-- protocol negotiation e streaming;
+- multiple writers or concurrent mutations;
+- an async runtime;
+- splitting into multiple crates or a separate runner;
+- protocol negotiation and streaming;
 - planner/lockfile/content addressing;
-- job e migration;
-- config, secret, cache e backup manager;
-- auto-port, endpoint discovery, LAN e socket dichiarativi;
-- probe avanzate;
-- update a più fasi, rollback e GC;
-- build OCI, import Compose ed exec interattivo.
+- jobs and migrations;
+- configuration, secret, cache, and backup managers;
+- auto-port, endpoint discovery, LAN, and declarative sockets;
+- advanced probes;
+- multi-stage updates, rollback, and GC;
+- OCI builds, Compose imports, and interactive exec.
 
-## 17. Fonti ufficiali
+## 17. Official sources
 
 - [PRoot-Distro v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/README.md)
 - [Session registry v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/proot_distro/session.py)

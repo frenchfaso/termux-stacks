@@ -1,84 +1,85 @@
-# Piano di implementazione Termux Stacks
+# Termux Stacks implementation plan
 
-**Stato:** operativo v0.1
-**Strategia:** spike prima, vertical slice, poi MVP
-**Implementazione:** Rust, un package/crate, un binario
+**Status:** operational v0.1
+**Strategy:** spikes first, vertical slice, then MVP
+**Implementation:** Rust, one package/crate, one binary
 
-**Avanzamento:** S0–S3 completate il 2026-08-14. Scaffold, CLI minima, daemon
-stub, path privati, lock singleton, CI host, package aarch64 e integrazione
-runit sono verdi. L'harness device v3 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
-il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
-[evidence/S0.md](evidence/S0.md). S1 ha qualificato `Entrypoint`/`Cmd`, argv,
-environment ordinario non riservato, working directory ed exit status con
-31 PASS, 0 FAIL e 0 SKIP. S2 ha riprodotto tre falsi negativi del session
-registry con 16 PASS, 0 FAIL e 0 SKIP, imponendo `unknown` dopo la perdita
-dell'handle del child. S3 ha qualificato exact-session kill e 100 cicli di
-drain con 15 PASS, 0 FAIL e 0 SKIP. I record sono
-[evidence/S1.md](evidence/S1.md), [evidence/S2.md](evidence/S2.md) ed
-[evidence/S3.md](evidence/S3.md). La fixture package resta
-intenzionalmente un template pre-release: tag pubblico e checksum del tarball
-GitHub appartengono a G3.
+**Progress:** S0–S3 completed on 2026-08-14. The scaffold, minimal CLI, daemon
+stub, private paths, singleton lock, host CI, aarch64 package, and runit
+integration are green. The v3 device harness completed with 24 PASS, 0 FAIL,
+and 0 SKIP; the stateful runit cycle is PASS. Evidence and limitations are
+recorded in [evidence/S0.md](evidence/S0.md). S1 qualified
+`Entrypoint`/`Cmd`, argv, ordinary non-reserved environment variables,
+working directory, and exit status with 31 PASS, 0 FAIL, and 0 SKIP. S2
+reproduced three false negatives in the session registry with 16 PASS, 0 FAIL,
+and 0 SKIP, requiring `unknown` after the child handle is lost. S3 qualified
+exact-session kill and 100 drain cycles with 15 PASS, 0 FAIL, and 0 SKIP. The
+records are [evidence/S1.md](evidence/S1.md),
+[evidence/S2.md](evidence/S2.md), and [evidence/S3.md](evidence/S3.md). The
+package fixture intentionally remains a pre-release template: the public tag
+and GitHub tarball checksum belong to G3.
 
-## 1. Verdetto architetturale
+## 1. Architecture verdict
 
-La direzione è approvata per iniziare gli spike. Non è approvato implementare
-direttamente l'MVP come se le primitive PRoot fossero già affidabili.
+The direction is approved for starting the spikes. Implementing the MVP
+directly as though the PRoot primitives were already reliable is not approved.
 
-Quattro rischi possono cambiare il prodotto:
+Four risks can change the product:
 
-1. il session registry di `proot-distro` è best effort;
-2. `command` non equivale a un override raw dell'Entrypoint;
-3. signal propagation e graceful stop dipendono da PRoot;
-4. installazione engine e ownership Termux Stacks non sono atomiche.
+1. the `proot-distro` session registry is best effort;
+2. `command` is not equivalent to a raw Entrypoint override;
+3. signal propagation and graceful stop depend on PRoot;
+4. engine installation and Termux Stacks ownership are not atomic.
 
-Si procede con gate stop/go. Una garanzia che non supera il test sul device
-viene rimossa o ridotta; non viene compensata con una state machine più grande.
+Work proceeds through stop/go gates. A guarantee that does not pass testing on
+a device is removed or narrowed; it is not compensated for with a larger state
+machine.
 
-## 2. Scope congelato
+## 2. Frozen scope
 
-Il bootstrap include:
+The bootstrap includes:
 
 - `config validate`, `up`, `status`, `down`;
-- un manifest, uno stack, un servizio;
-- un demone sincrono, un lock advisory, un socket Unix e una mutazione alla
-  volta;
-- SQLite con intent/outcome;
-- un adapter `proot-distro`;
-- un rootfs, processo foreground, log file e recovery conservativa.
+- one manifest, one stack, one service;
+- a synchronous daemon, one advisory lock, one Unix socket, and one mutation
+  at a time;
+- SQLite with intent/outcome;
+- a `proot-distro` adapter;
+- one rootfs, a foreground process, a log file, and conservative recovery.
 
-L'MVP successivo aggiunge:
+The subsequent MVP adds:
 
-- più stack e più servizi;
-- DAG `dependsOn`;
-- environment non sensibile;
-- volumi e bind;
-- porte loopback fisse;
-- restart e consultazione log.
+- multiple stacks and services;
+- a `dependsOn` DAG;
+- non-sensitive environment variables;
+- volumes and binds;
+- fixed loopback ports;
+- restart and log retrieval.
 
-Tutto il resto è differito. La feature matrix normativa è in
-[SPECIFICATION.md](SPECIFICATION.md), non viene duplicata qui.
+Everything else is deferred. The normative feature matrix is in
+[SPECIFICATION.md](SPECIFICATION.md) and is not duplicated here.
 
-## 3. Decisioni da chiudere con evidenza
+## 3. Decisions to close with evidence
 
-| Decisione | Default iniziale | Gate |
+| Decision | Initial default | Gate |
 |---|---|---|
-| modello concorrenza | sincrono, thread limitati | cambiare solo con misura |
-| parser YAML | crate mantenuta da scegliere | fixture ostili |
-| SQLite | system `libsqlite` preferito | build 4 arch + fault test |
-| SQLite journal/PRAGMA | non congelati | filesystem Termux reale |
-| framing IPC | JSON Lines, 1 MiB, versione esatta | frame e timeout test |
-| command | default OCI o override limitato | matrice engine |
+| concurrency model | synchronous, limited threads | change only with measurements |
+| YAML parser | maintained crate, to be selected | hostile fixtures |
+| SQLite | system `libsqlite` preferred | 4-architecture build + fault test |
+| SQLite journal/PRAGMA | not frozen | real Termux filesystem |
+| IPC framing | JSON Lines, 1 MiB, exact version | frame and timeout tests |
+| command | OCI default or limited override | engine matrix |
 | stop | `proot-distro kill` | signal/tree test |
-| recovery automatica | fail-closed confermato | S2: empty non prova assenza |
-| alias cleanup | mai automatico se incerto | crash install test |
-| licenza | Apache-2.0 | decisa il 2026-08-14 |
-| nome | `termux-stacks` pre-release | feedback maintainer |
+| automatic recovery | fail-closed confirmed | S2: empty does not prove absence |
+| alias cleanup | never automatic when uncertain | install crash test |
+| license | Apache-2.0 | decided on 2026-08-14 |
+| name | `termux-stacks` pre-release | maintainer feedback |
 
-Parser, binding SQLite e libreria CLI non devono essere scelti per popolarità
-soltanto: manutenzione, dipendenze native, `unsafe`, dimensione e build
-Termux fanno parte dell'esito.
+The parser, SQLite binding, and CLI library must not be selected on popularity
+alone: maintenance, native dependencies, `unsafe`, size, and the Termux build
+are part of the outcome.
 
-## 4. Struttura iniziale
+## 4. Initial structure
 
 ```text
 termux-stacks/
@@ -104,290 +105,292 @@ termux-stacks/
 └── docs/
 ```
 
-Non si crea un workspace multi-crate né `xtask`. Un modulo viene estratto
-solo quando possiede un confine compilabile e testabile che riduce realmente
-accoppiamento o `unsafe`.
+Do not create a multi-crate workspace or `xtask`. Extract a module only when it
+has a compilable and testable boundary that genuinely reduces coupling or
+`unsafe`.
 
-## 5. Fase S0 — Bootstrap Rust e package — completata
+## 5. Phase S0 — Rust and package bootstrap — completed
 
-**Obiettivo:** dimostrare che il più piccolo artefatto corretto vive in
-Termux.
+**Objective:** demonstrate that the smallest correct artifact runs in Termux.
 
-Deliverable:
+Deliverables:
 
-- package Cargo `publish = false`, edition esplicita e `rust-version = 1.93`;
-- `Cargo.lock` versionato;
-- CLI con `--version`, `--help` e subcommand interno `daemon`;
-- path risolti da `PREFIX`, mai hardcoded su `/usr` o `/run`;
-- fixture Termux esercitata da un package build aarch64, con revisione
-  sorgente, checksum e licenza registrati, che costruisce e installa un solo
-  ELF; release pubblica e checksum del relativo tarball sono differiti a G3;
-- service script `termux-stacksd` foreground con stderr su stdout;
-- file `down` e nessuna abilitazione automatica.
+- a Cargo package with `publish = false`, an explicit edition, and
+  `rust-version = 1.93`;
+- a committed `Cargo.lock`;
+- a CLI with `--version`, `--help`, and the internal `daemon` subcommand;
+- paths resolved from `PREFIX`, never hardcoded to `/usr` or `/run`;
+- a Termux fixture exercised by an aarch64 package build, with source revision,
+  checksum, and license recorded, that builds and installs a single ELF; the
+  public release and checksum of its tarball are deferred to G3;
+- a foreground `termux-stacksd` service script with stderr redirected to
+  stdout;
+- a `down` file and no automatic enablement.
 
-Test:
+Tests:
 
-- `cargo fmt --check`, Clippy `-D warnings`, unit test;
-- build host da source tree senza metadata Git;
-- cross-build o package build aarch64;
-- install, `--version`, start/stop servizio su device;
+- `cargo fmt --check`, Clippy `-D warnings`, and unit tests;
+- host build from a source tree without Git metadata;
+- an aarch64 cross-build or package build;
+- install, `--version`, and service start/stop on a device;
 
-Exit:
+Exit criteria:
 
-- package e servizio funzionano su un device aarch64;
-- nessun maintainer script o binario scarica crate, Cargo, rustup o toolchain
-  durante installazione, avvio o runtime; il package manager può risolvere le
-  dipendenze dichiarate e `up` potrà acquisire esplicitamente immagini;
-- dimensione ELF, package e dipendenze Cargo/runtime sono registrate.
+- the package and service work on an aarch64 device;
+- no maintainer script or binary downloads crates, Cargo, rustup, or a toolchain
+  during installation, startup, or runtime; the package manager may resolve
+  declared dependencies, and `up` may explicitly acquire images;
+- ELF size, package size, and Cargo/runtime dependencies are recorded.
 
-## 6. Fase S1 — Contratto command — completata
+## 6. Phase S1 — Command contract — completed
 
-**Obiettivo:** documentare ciò che l'engine esegue davvero.
+**Objective:** document what the engine actually executes.
 
-Creare quattro OCI fixture:
+Create four OCI fixtures:
 
 1. Entrypoint + Cmd;
-2. solo Cmd;
-3. solo Entrypoint;
-4. né Entrypoint né Cmd.
+2. Cmd only;
+3. Entrypoint only;
+4. neither Entrypoint nor Cmd.
 
-Per ciascuna provare `run` senza argomenti e con argomenti dopo `--`.
-Registrare argv guest, exit status, working directory ed environment. Provare
-separatamente `login -- COMMAND` per dimostrare il confine della shell utente
-con `-c`. PID/process tree e signal target appartengono a S2/S3.
+For each, test `run` without arguments and with arguments after `--`. Record
+guest argv, exit status, working directory, and environment. Test
+`login -- COMMAND` separately to demonstrate the user-shell boundary with
+`-c`. PID/process tree and signal target belong to S2/S3.
 
-Exit:
+Exit criteria:
 
-- tabella golden verificata su device (31 PASS, 0 FAIL, 0 SKIP);
-- `command` del manifest ha una semantica onesta e rifiuta i casi non
-  rappresentabili;
-- nessuna concatenazione shell è costruita dal runtime.
+- golden table verified on a device (31 PASS, 0 FAIL, 0 SKIP);
+- manifest `command` has honest semantics and rejects unrepresentable cases;
+- the runtime builds no shell concatenation.
 
-## 7. Fase S2 — Session registry e osservazione — completata
+## 7. Phase S2 — Session registry and observation — completed
 
-**Obiettivo:** sapere quando `proot-distro ps` è evidenza sufficiente.
+**Objective:** determine when `proot-distro ps` is sufficient evidence.
 
-La suite minima eseguita su `proot-distro 5.6.0` comprende:
+The minimum suite run against `proot-distro 5.6.0` includes:
 
-- T1: una sessione visibile, exit normale e pruning;
-- T2: due sessioni contemporanee sullo stesso alias e rimozione indipendente;
-- F1: pubblicazione negata con workload vivo ma `ps --quiet` vuoto;
-- F2: lettura negata con scomparsa transiente e successiva ricomparsa;
-- F3: JSON troncato sullo stesso inode ancora locked, omesso mentre il
-  workload resta vivo e potato dopo l'exit.
+- T1: one visible session, normal exit, and pruning;
+- T2: two concurrent sessions on the same alias and independent removal;
+- F1: publication denied, with a live workload but empty `ps --quiet`;
+- F2: read denied, with transient disappearance and subsequent reappearance;
+- F3: truncated JSON on the same still-locked inode, omitted while the
+  workload remains alive and pruned after exit.
 
-Root PRoot terminato con guest ancora vivo passa a S3, dove si qualifica anche
-il target dei segnali. La perdita del vero daemon e la reconciliation passano
-al vertical slice S5. PID reuse sintetico e fault di `flock` non aggiungono
-una garanzia utile dopo i falsi negativi già osservati e non sono gate di S2.
+Killing the root PRoot while the guest remains alive moves to S3, which also
+qualifies the signal target. Loss of the real daemon and reconciliation move
+to the S5 vertical slice. Synthetic PID reuse and `flock` faults do not add a
+useful guarantee after the false negatives already observed and are not S2
+gates.
 
-L'harness deve osservare process tree host indipendentemente da `pd ps` per
-individuare falsi negativi. Ogni caso conserva output raw, exit status e
-osservazione indipendente in un corpus; una rappresentazione golden annota il
-significato atteso senza introdurre ancora codice di parsing production.
+The harness must observe the host process tree independently of `pd ps` to
+identify false negatives. Each case preserves raw output, exit status, and an
+independent observation in a corpus; a golden representation annotates the
+expected meaning without introducing production parsing code yet.
 
-Exit verificato: **16 PASS, 0 FAIL, 0 SKIP** nel runtime sintetico, con corpus
-raw e golden. La decisione è definitiva per v0: un risultato empty non è mai
-da solo evidenza forte. Durante la vita dello stesso demone l'handle del child
-e `boot_id/PID/starttime` sono l'evidenza primaria; il registry è
-complementare. Dopo la perdita dell'handle, empty, errore o record malformed
-producono `unknown`: niente restart, recreate o delete automatico.
+Verified exit: **16 PASS, 0 FAIL, 0 SKIP** in the synthetic runtime, with a raw
+and golden corpus. The decision is final for v0: an empty result is never
+strong evidence on its own. During the lifetime of the same daemon, the child
+handle and `boot_id/PID/starttime` are the primary evidence; the registry is
+complementary. After the handle is lost, empty, error, or a malformed record
+produces `unknown`: no automatic restart, recreate, or delete.
 
-## 8. Fase S3 — Signal e tree-kill — completata
+## 8. Phase S3 — Signal and tree-kill — completed
 
-**Obiettivo:** qualificare stop e ownership del processo.
+**Objective:** qualify process stop and ownership.
 
-La suite eseguita usa:
+The executed suite uses:
 
-- processo cooperativo che gestisce TERM;
-- tree che ignora TERM;
-- figlio e nipote;
-- processo che cambia sessione/process group;
-- tracer PRoot terminato con SIGKILL mentre i guest e gli holder del record
-  restano attivi.
+- a cooperative process that handles TERM;
+- a tree that ignores TERM;
+- a child and grandchild;
+- a process that changes session/process group;
+- a PRoot tracer terminated with SIGKILL while the guests and record holders
+  remain active.
 
-S3 non richiede il daemon Termux Stacks. La perdita di un parent artificiale
-non aggiunge un contratto engine rispetto ai casi qualificati; SIGTERM e
-SIGKILL del vero daemon, reaping e recovery vengono provati nel vertical slice
-S5.
+S3 does not require the Termux Stacks daemon. Losing an artificial parent adds
+no engine contract beyond the qualified cases; SIGTERM and SIGKILL of the real
+daemon, reaping, and recovery are tested in the S5 vertical slice.
 
-La matrice ha confrontato:
+The matrix compared:
 
-- TERM al PGID host come controllo negativo;
-- `proot-distro kill <session-pid>`, dove il PID è quello restituito da
+- TERM to the host PGID as a negative control;
+- `proot-distro kill <session-pid>`, where the PID is returned by
   `proot-distro ps`;
-- escalation engine;
-- orfani dopo stop.
+- engine escalation;
+- orphans after stop.
 
-Alias e `--all` non sono target production e non vengono esercitati. Sono
-stati eseguiti 100 cicli sul workload cooperativo; ogni drain richiede insieme
-ruoli noti assenti, nessun holder del record e PGID/SID qualificati vuoti.
+Aliases and `--all` are not production targets and are not exercised. The
+cooperative workload completed 100 cycles; every drain jointly requires known
+roles to be absent, no record holders, and empty qualified PGIDs/SIDs.
 
-Exit verificato:
+Verified exit:
 
-- una sola strategia di stop v0, exact session ID;
-- timeout fisso documentato come best effort;
-- nessun `stopGracePeriod` pubblico;
-- nessun guest osservabile nei 100 cicli; C3 lascia intatta la seconda
-  sessione con lo stesso alias.
+- exactly one v0 stop strategy: exact session ID;
+- a fixed timeout documented as best effort;
+- no public `stopGracePeriod`;
+- no observable guest in 100 cycles; C3 leaves the second session with the
+  same alias intact.
 
-## 9. Fase S4 — Ownership e crash durante install
+## 9. Phase S4 — Ownership and crash during install
 
-**Obiettivo:** classificare ciò che lascia un `proot-distro install`
-interrotto, prima di progettare il confine SQLite/engine.
+**Objective:** classify what an interrupted `proot-distro install` leaves
+behind before designing the SQLite/engine boundary.
 
-Il test usa soltanto la CLI pubblica dell'engine e alias disposable, casuali e
-mai riutilizzati. Interrompe `proot-distro install` in finestre controllate
-durante download ed estrazione, quindi classifica l'alias risultante:
+The test uses only the engine's public CLI and disposable, random aliases that
+are never reused. It interrupts `proot-distro install` in controlled windows
+during download and extraction, then classifies the resulting alias:
 
-- `absent`: l'alias non è osservabile;
-- `owned`: l'alias disposable è osservabile e attribuibile a quel tentativo;
-- `ambiguous`: le interfacce pubbliche non bastano a provare uno dei due casi.
+- `absent`: the alias is not observable;
+- `owned`: the disposable alias is observable and attributable to that attempt;
+- `ambiguous`: the public interfaces are insufficient to prove either case.
 
-S4 non introduce SQLite, daemon, start del workload o commit di revisione. Il
-test non usa né modifica alias preesistenti. Intent persistito e fault point
-transazionali vengono applicati nel vertical slice S5 usando questa tabella di
-esiti.
+S4 does not introduce SQLite, a daemon, workload startup, or revision commit.
+The test neither uses nor modifies pre-existing aliases. Persisted intent and
+transactional fault points are applied in the S5 vertical slice using this
+outcome table.
 
-Exit:
+Exit criteria:
 
-- tabella raw + golden degli esiti `absent | owned | ambiguous`;
-- strategia deterministica futura per `absent` e `owned`;
-- `ambiguous` definito fail-closed: nessuna cancellazione o avvio automatico;
-- nessun test richiede accesso agli internals di `proot-distro`;
-- procedura manuale per gli artefatti dubbi.
+- raw + golden table of `absent | owned | ambiguous` outcomes;
+- a future deterministic strategy for `absent` and `owned`;
+- `ambiguous` defined as fail-closed: no automatic deletion or startup;
+- no test requires access to `proot-distro` internals;
+- a manual procedure for questionable artifacts.
 
-## 10. Fase S5 — Vertical slice
+## 10. Phase S5 — Vertical slice
 
-**Obiettivo:** un percorso end-to-end utile, non ancora multi-servizio.
+**Objective:** a useful end-to-end path that is not yet multi-service.
 
-Deliverable:
+Deliverables:
 
-- parser strict del profilo vertical slice;
-- parser production dell'output engine derivato dal corpus raw + golden S2;
-- daemon singleton tramite lock advisory e socket locale;
-- protocollo request/response a versione esatta;
+- a strict parser for the vertical-slice profile;
+- a production parser for engine output derived from the S2 raw + golden
+  corpus;
+- a singleton daemon through an advisory lock and local socket;
+- an exact-version request/response protocol;
 - SQLite `meta/stacks/services/operations`;
 - `validate/up/status/down`;
-- install rootfs, run foreground, log ed exit;
-- reconciliation definita dagli esiti S2–S4;
-- fake engine per test host e adapter reale su device;
-- ripetizione sotto il daemon reale dei test signal/tree-kill scelti in S3;
-- SIGTERM e SIGKILL del daemon mentre il child engine resta attivo, con
-  reaping/recovery fail-closed;
-- upgrade del binario mentre il daemon precedente è vivo: protocol mismatch
-  diagnosticato senza proseguire.
+- rootfs install, foreground run, log, and exit;
+- reconciliation defined by the S2–S4 outcomes;
+- a fake engine for host tests and a real adapter on a device;
+- repetition under the real daemon of the signal/tree-kill tests selected in
+  S3;
+- SIGTERM and SIGKILL of the daemon while the engine child remains active, with
+  fail-closed reaping/recovery;
+- binary upgrade while the previous daemon is alive: diagnose a protocol
+  mismatch without proceeding.
 
-Fault points obbligatori:
+Required fault points:
 
-1. prima dell'intent;
-2. dopo intent, prima dell'engine;
-3. dopo install;
-4. dopo start;
-5. prima del commit;
-6. durante down.
+1. before intent;
+2. after intent, before the engine;
+3. after install;
+4. after start;
+5. before commit;
+6. during down.
 
-Exit:
+Exit criteria:
 
-- ciclo completo ripetibile su aarch64;
-- 20 kill/restart senza duplicati **oppure** passaggio sicuro a `unknown`
-  quando l'assenza non è dimostrabile;
-- database consistente dopo kill -9 e storage full simulato;
-- log non bloccano il child;
-- campi MVP non implementati falliscono come `unsupported`.
+- a repeatable complete cycle on aarch64;
+- 20 kill/restart cycles without duplicates **or** a safe transition to
+  `unknown` when absence cannot be demonstrated;
+- a consistent database after kill -9 and simulated full storage;
+- logs do not block the child;
+- unimplemented MVP fields fail as `unsupported`.
 
-## 11. Fase M1 — MVP multi-servizio
+## 11. Phase M1 — Multi-service MVP
 
-Si apre solo dopo S0–S5.
+It starts only after S0–S5.
 
-Vertical slice incrementali, ciascuno completo di test e recovery:
+Incremental vertical slices, each complete with tests and recovery:
 
-1. più stack e namespace;
-2. più servizi e ordinamento DAG;
-3. environment letterale;
-4. volumi nominati e bind;
-5. porte loopback fisse;
+1. multiple stacks and namespaces;
+2. multiple services and DAG ordering;
+3. literal environment variables;
+4. named volumes and binds;
+5. fixed loopback ports;
 6. restart/backoff;
-7. `logs --tail` e `restart`.
+7. `logs --tail` and `restart`.
 
-Non si sviluppano due slice in parallelo se condividono una failure mode non
-ancora chiusa. Ogni nuova colonna SQLite e ogni stato deve corrispondere a una
-domanda utente o di recovery concreta.
+Do not develop two slices in parallel when they share an unresolved failure
+mode. Every new SQLite column and state must correspond to a concrete user or
+recovery question.
 
-## 12. CI proporzionata
+## 12. Proportionate CI
 
-Controlli proporzionati per fase:
+Checks proportionate to each phase:
 
-| Trigger | Controlli |
+| Trigger | Checks |
 |---|---|
-| ogni change, S0–S4 | fmt, Clippy, unit e validazione di harness/corpus spike |
-| ogni change, da S5 | controlli precedenti, parser fixture e fake-engine contract |
-| main/dipendenze | test integrazione host e build source archive |
-| nightly o crate native | package build sulle 4 architetture Termux |
-| manuale | smoke e fault test su un device aarch64 |
+| every change, S0–S4 | fmt, Clippy, unit tests, and validation of spike harnesses/corpora |
+| every change, from S5 | previous checks, parser fixtures, and fake-engine contract |
+| main/dependencies | host integration tests and source-archive build |
+| nightly or native crate | package build on all 4 Termux architectures |
+| manual | smoke and fault tests on an aarch64 device |
 
-Prima dell'RC si aggiungono più versioni Android, almeno un secondo device,
-reboot/Doze/storage pressure e soak. Tre device e 72 ore non bloccano il
-bootstrap.
+Before the RC, add more Android versions, at least one second device,
+reboot/Doze/storage pressure, and soak testing. Three devices and 72 hours do
+not block the bootstrap.
 
-Ogni failure device conserva versioni, argv redatti, DB integrity result,
-operazione corrente, process tree e log. I test non devono esportare secret.
+Every device failure preserves versions, redacted argv, DB integrity result,
+current operation, process tree, and logs. Tests must not export secrets.
 
-## 13. Gate
+## 13. Gates
 
 ### G0 — Feasibility
 
-S0–S4 completate; command, sessioni, signal e ownership hanno un contratto
-verificato. Un fallimento riduce scope o ferma il progetto prima del daemon.
+S0–S4 completed; command, sessions, signals, and ownership have a verified
+contract. A failure narrows the scope or stops the project before the daemon.
 
 ### G1 — Vertical slice
 
-S5 completa su aarch64 e recovery coerente con le garanzie pubbliche.
+S5 completed on aarch64, with recovery consistent with the public guarantees.
 
 ### G2 — MVP
 
-M1 completa: due stack, almeno due servizi, DAG, volume, porta e restart
-superano smoke e fault test.
+M1 completed: two stacks, at least two services, a DAG, a volume, a port, and
+restart pass smoke and fault tests.
 
 ### G3 — Package candidate
 
-Build quattro architetture, licenza, release archive/checksum, service
-disabilitato, upgrade testato e feedback sul nome acquisito.
+Four-architecture build, license, release archive/checksum, disabled service,
+tested upgrade, and name feedback obtained.
 
 ### G4 — Official proposal
 
-Il progetto è attivo, ha utenti/release e soddisfa la policy vigente. Essere
-tecnicamente pacchettizzabile non garantisce l'ammissione.
+The project is active, has users/releases, and meets the current policy. Being
+technically packageable does not guarantee acceptance.
 
-## 14. Rischi residui
+## 14. Residual risks
 
-| Rischio | Risposta |
+| Risk | Response |
 |---|---|
-| sessione non registrata | fail closed, niente auto-start |
-| PID riutilizzato | evidenze multiple, mai PID-only |
-| crash fra SQLite ed engine | intent-first, alias unico, classify |
-| rootfs parziale | conserva e segnala, cleanup manuale |
-| tag OCI mutabile/cache | niente promessa di update riproducibile |
-| Android kill/force-stop | runit/Boot best effort, limite pubblico |
-| disk full/corruzione | test fault, stop delle mutazioni |
-| output engine cambia | adapter + fixture, fail closed |
-| crate native non cross-build | spike e fallback prima dell'MVP |
-| scope creep | feature differite richiedono gate/ADR |
+| unregistered session | fail closed, no auto-start |
+| reused PID | multiple evidence sources, never PID-only |
+| crash between SQLite and engine | intent-first, unique alias, classify |
+| partial rootfs | preserve and report, manual cleanup |
+| mutable OCI tag/cache | no promise of reproducible updates |
+| Android kill/force-stop | runit/Boot best effort, public limitation |
+| disk full/corruption | fault tests, stop mutations |
+| engine output changes | adapter + fixture, fail closed |
+| native crate does not cross-build | spike and fallback before the MVP |
+| scope creep | deferred features require a gate/ADR |
 
 ## 15. Definition of Done v0.1
 
-v0.1 è completa quando un utente può:
+v0.1 is complete when a user can:
 
-1. installare il package senza toolchain Rust sul dispositivo;
-2. abilitare esplicitamente il servizio;
-3. validare e avviare due stack multi-servizio;
-4. consultare stato e log, riavviare e fermare;
-5. conservare dati in un volume attraverso restart e nuova immagine;
-6. ricevere un errore su porta occupata o feature non supportata;
-7. uccidere e riavviare il demone senza duplicazione silenziosa;
-8. capire quando serve intervento manuale;
-9. comprendere che PRoot non è isolamento e Android resta best effort.
+1. install the package without a Rust toolchain on the device;
+2. explicitly enable the service;
+3. validate and start two multi-service stacks;
+4. inspect status and logs, restart, and stop;
+5. preserve data in a volume across restart and a new image;
+6. receive an error for an occupied port or unsupported feature;
+7. kill and restart the daemon without silent duplication;
+8. understand when manual intervention is required;
+9. understand that PRoot is not isolation and Android remains best effort.
 
-Python può essere presente come dipendenza transitiva di `proot-distro`.
-La garanzia è che Termux Stacks non installa un runtime Rust o un secondo
-package manager durante installazione/avvio.
+Python may be present as a transitive dependency of `proot-distro`. The
+guarantee is that Termux Stacks does not install a Rust runtime or a second
+package manager during installation/startup.

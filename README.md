@@ -1,64 +1,65 @@
 # Termux Stacks
 
-Termux Stacks è un orchestratore locale di applicazioni multi-servizio per
-Termux/Android. L'esperienza è ispirata a Docker Compose, ma l'esecuzione usa
-le primitive realmente disponibili senza root: `proot-distro` per immagini
-OCI, rootfs e processi PRoot; `termux-services`/runit per il control plane.
+Termux Stacks is a local multi-service application orchestrator for
+Termux/Android. Its user experience is inspired by Docker Compose, while its
+execution model uses the primitives that are actually available without root:
+`proot-distro` for OCI images, root filesystems, and PRoot processes;
+`termux-services`/runit for the control plane.
 
-Non è un container runtime del kernel. I servizi condividono UID Android,
-kernel e rete con Termux: non esistono namespace, cgroup, firewall, mount
-realmente read-only o isolamento fra workload ostili.
+It is not a kernel container runtime. Services share the Android UID, kernel,
+and network with Termux: there are no namespaces, cgroups, firewall, truly
+read-only mounts, or isolation between hostile workloads.
 
-## Stato
+## Status
 
-Il bootstrap **S0 è completato su aarch64**. CI host, package Android e
-servizio runit sono verdi; l'harness device v3 ha chiuso con 24 PASS, 0 FAIL
-e 0 SKIP. Il ciclo stateful ha verificato enable/start, singleton, recupero
-dello socket stale, restart dopo SIGKILL e disable finale. Il record
-riproducibile è in [docs/evidence/S0.md](docs/evidence/S0.md).
-Anche lo spike **S1 è completato**: 31 PASS hanno qualificato la composizione
-OCI di `Entrypoint`/`Cmd`, argv, working directory, environment ordinario ed
-exit status; il record è in [docs/evidence/S1.md](docs/evidence/S1.md). Lo
-spike **S2 è completato**: 16 PASS hanno riprodotto tre falsi negativi del
-session registry e congelato una policy fail-closed; il record è in
-[docs/evidence/S2.md](docs/evidence/S2.md). Anche **S3 è completato**: la
-strategia di stop usa soltanto l'identificatore esatto di sessione, ha drenato
-tree cooperativi, TERM ignorato, un discendente in una nuova sessione e guest
-rimasti dopo la morte del tracer PRoot, oltre a 100 cicli consecutivi. Il
-record è in [docs/evidence/S3.md](docs/evidence/S3.md). Non esiste ancora un
-runtime utilizzabile: l'ownership durante install deve superare S4 prima del
-vertical slice S5.
+The **S0 bootstrap is complete on aarch64**. Host CI, the Android package,
+and the runit service are green; device harness v3 completed with 24 PASS,
+0 FAIL, and 0 SKIP. The stateful cycle verified enable/start, singleton
+enforcement, stale-socket recovery, restart after SIGKILL, and final disable.
+The reproducible record is in [docs/evidence/S0.md](docs/evidence/S0.md).
+The **S1 spike is also complete**: 31 PASS checks qualified OCI
+`Entrypoint`/`Cmd` composition, argv, working directory, ordinary environment,
+and exit status; its record is in
+[docs/evidence/S1.md](docs/evidence/S1.md). The **S2 spike is complete**:
+16 PASS checks reproduced three session-registry false negatives and froze a
+fail-closed policy; its record is in
+[docs/evidence/S2.md](docs/evidence/S2.md). **S3 is complete as well**: the
+stop strategy uses only the exact session identifier and drained cooperative
+trees, TERM-ignoring trees, a descendant in a new session, and guests left
+behind after the PRoot tracer died, plus 100 consecutive cycles. Its record is
+in [docs/evidence/S3.md](docs/evidence/S3.md). There is no usable runtime yet:
+install-time ownership must pass S4 before the S5 vertical slice begins.
 
-La direzione architetturale è congelata solo nei punti essenziali:
+Only the essential architectural decisions are frozen:
 
-- un package/crate Rust e un solo eseguibile pubblico, `termux-stacks`;
-- una CLI breve e un demone globale avviato come `termux-stacks daemon`;
-- `termux-stacksd` è il nome del servizio runit, non un secondo binario;
-- un lock advisory del demone, un socket Unix locale e una sola coda di
-  mutazioni;
-- SQLite come unica fonte di verità, inclusi intent e risultati operativi;
-- un adapter isolato che usa soltanto la CLI pubblica di `proot-distro`;
-- un rootfs scrivibile distinto per servizio e persistenza solo esplicita;
-- recovery conservativa: in caso di ambiguità, fermarsi e chiedere intervento.
+- one Rust package/crate and one public executable, `termux-stacks`;
+- a small CLI and one global daemon started as `termux-stacks daemon`;
+- `termux-stacksd` is the runit service name, not a second binary;
+- one daemon advisory lock, one local Unix socket, and one mutation queue;
+- SQLite as the sole source of truth, including operation intents and results;
+- an isolated adapter that uses only the public `proot-distro` CLI;
+- one distinct writable rootfs per service and explicit persistence only;
+- conservative recovery: halt processing and require intervention when state
+  is ambiguous.
 
-In particolare, `proot-distro ps` vuoto non prova l'assenza di un workload.
-Finché il demone conserva l'handle del figlio usa PID, start time e boot ID;
-dopo la perdita di quell'handle uno stato non osservabile diventa `unknown` e
-non autorizza restart, recreate o delete automatici.
+In particular, empty `proot-distro ps` output does not prove that a workload
+is absent. While the daemon retains the child handle, it uses the PID, start
+time, and boot ID; once that handle is lost, unobservable state becomes
+`unknown` and does not authorize automatic restart, recreation, or deletion.
 
-Nella stessa generazione del demone, quando handle, identità persistita e
-record positivo coincidono, lo stop v0 usa solo
-`proot-distro kill <session-pid>`. Non segnala direttamente quel PID host, non
-usa l'alias e non usa `--all`; l'exit status viene accettato soltanto insieme
-alle precondizioni di ownership. La grace interna dell'engine resta fissa e
-best effort, quindi il manifest non espone `stopGracePeriod`.
+Within the same daemon generation, when the handle, persisted identity, and a
+positive registry record agree, v0 stops the workload only with
+`proot-distro kill <session-pid>`. It does not signal that host PID directly,
+use the alias, or use `--all`; the exit status is accepted only together with
+the ownership preconditions. The engine's grace period remains fixed and
+best effort, so the manifest does not expose `stopGracePeriod`.
 
-## Primo risultato utilizzabile
+## First usable result
 
-Il primo vertical slice supporta un solo servizio e soltanto:
+The first vertical slice supports one service and only these commands:
 
 ```sh
-# dopo aver installato termux-services e riavviato la shell
+# after installing termux-services and restarting the shell
 sv-enable termux-stacksd
 termux-stacks config validate ./termux-stacks.yaml
 termux-stacks up ./termux-stacks.yaml
@@ -66,13 +67,13 @@ termux-stacks status notes
 termux-stacks down notes
 ```
 
-Serve a validare il percorso completo manifest → demone → SQLite →
-`proot-distro` → log → recovery. Il successivo MVP aggiunge più stack e più
-servizi, dipendenze semplici, environment, volumi, porte loopback fisse,
-restart e log. Job, secret manager, build, porte automatiche, update/rollback
-avanzati e compatibilità Compose sono differiti.
+This validates the complete manifest → daemon → SQLite → `proot-distro` →
+log → recovery path. The subsequent MVP adds multiple stacks and services,
+simple dependencies, environment variables, volumes, fixed loopback ports,
+restart, and logs. Jobs, secret management, builds, automatic ports, advanced
+update/rollback, and Compose compatibility are deferred.
 
-Manifest MVP previsto:
+Planned MVP manifest:
 
 ```yaml
 apiVersion: termux-stacks/v1alpha1
@@ -105,47 +106,48 @@ volumes:
   data: {}
 ```
 
-`command` sostituisce il `Cmd` OCI e conserva l'eventuale `Entrypoint`, come
-fa `proot-distro run CONTAINER -- ARG...`. `ports` non crea NAT: dichiara una
-porta che l'applicazione deve realmente aprire sulla rete condivisa.
+`command` replaces the OCI `Cmd` and preserves any `Entrypoint`, matching
+`proot-distro run CONTAINER -- ARG...`. `ports` does not create NAT: it
+declares a port that the application must actually open on the shared network.
 
-## Documentazione
+## Documentation
 
-- [Specifica del prodotto](docs/SPECIFICATION.md)
-- [Specifica del manifest](docs/MANIFEST_SPEC.md)
-- [Architettura](docs/ARCHITECTURE.md)
-- [Piano di implementazione](docs/IMPLEMENTATION_PLAN.md)
-- [Decisione Rust](docs/LANGUAGE_DECISION.md)
-- [Packaging Termux](docs/TERMUX_PACKAGING.md)
+- [Product specification](docs/SPECIFICATION.md)
+- [Manifest specification](docs/MANIFEST_SPEC.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
+- [Rust decision](docs/LANGUAGE_DECISION.md)
+- [Termux packaging](docs/TERMUX_PACKAGING.md)
 
-Ogni argomento ha una sola fonte normativa: comportamento pubblico nella
-specifica, schema nel manifest, dettagli interni nell'architettura e ordine
-del lavoro nel piano.
+English is the repository language for maintained documentation, code
+comments, diagnostics, and contribution material.
 
-## Dipendenze e limiti operativi
+Each topic has one normative source: public behavior in the product
+specification, schema in the manifest specification, internal details in the
+architecture, and work order in the implementation plan.
 
-La baseline da verificare nello spike è `proot-distro 5.6.0`; il package
-richiederà inoltre `termux-services`. Termux:Boot resterà opzionale e l'avvio
-dopo reboot sarà best effort. Nessun processo può sopravvivere a un force-stop
-Android dell'app Termux.
+## Dependencies and operational limits
 
-Lo stato rimane sotto `$PREFIX` e non nello storage Android condiviso. Il
-servizio viene installato disabilitato: l'utente deve abilitarlo
-esplicitamente.
+The spike baseline is `proot-distro 5.6.0`; the package will also require
+`termux-services`. Termux:Boot remains optional, and startup after reboot is
+best effort. No process can survive an Android force-stop of the Termux app.
 
-## Nome, affiliazione e licenza
+State remains under `$PREFIX`, never in shared Android storage. The service is
+installed disabled and must be enabled explicitly by the user.
 
-Gli identificatori pre-release sono:
+## Name, affiliation, and license
 
-- prodotto, repository e package: **Termux Stacks** / `termux-stacks`;
+The pre-release identifiers are:
+
+- product, repository, and package: **Termux Stacks** / `termux-stacks`;
 - CLI: `termux-stacks`;
-- servizio runit: `termux-stacksd`;
+- runit service: `termux-stacksd`;
 - manifest: `termux-stacks.yaml`.
 
-Termux Stacks è un progetto indipendente della comunità e non è approvato o
-supportato dai maintainer di Termux. Prima della prima release pubblica va
-chiesto un riscontro sull'uso di “Termux” nel nome.
+Termux Stacks is an independent community project and is not endorsed or
+supported by the Termux maintainers. Feedback on using “Termux” in the name
+must be requested before the first public release.
 
-Il progetto è distribuito sotto [Apache License 2.0](LICENSE). La licenza
-riguarda Termux Stacks; `proot-distro`, Termux e le altre dipendenze
-conservano le rispettive licenze.
+The project is distributed under the [Apache License 2.0](LICENSE). This
+license covers Termux Stacks; `proot-distro`, Termux, and other dependencies
+retain their respective licenses.

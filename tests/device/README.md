@@ -1,74 +1,75 @@
 # Device harness
 
-Gli harness raccolgono evidenze per i gate eseguiti su Termux reale. S0 prova
-binario/package/runit; S1 qualifica la semantica pubblica di
-`proot-distro run`. Sono separati dagli adapter production e non richiedono il
-daemon Termux Stacks, salvo il test isolato dello scaffold in S0.
+The harnesses collect evidence for gates run on a real Termux installation.
+S0 tests the binary, package, and runit integration; S1 qualifies the public
+semantics of `proot-distro run`. They are separate from the production
+adapters and do not require the Termux Stacks daemon, except for the isolated
+scaffold test in S0.
 
 ## S0 — Bootstrap
 
-Questo harness raccoglie evidenze ripetibili per il checkpoint S0 su un
-dispositivo Termux. Verifica un binario `termux-stacks` **già fornito**: non
-compila, non installa package, non esegue `apt`/`pkg`, non abilita servizi e non
-usa `sudo`.
+This harness collects reproducible evidence for the S0 checkpoint on a Termux
+device. It verifies an **already provided** `termux-stacks` binary: it does not
+compile, install packages, run `apt`/`pkg`, enable services, or use `sudo`.
 
-## Prerequisiti
+## Prerequisites
 
-- Termux con Bash e coreutils;
-- un binario `termux-stacks` eseguibile per l'architettura del dispositivo;
-- `PREFIX` impostato dalla sessione Termux;
-- `file` e `readelf` sono opzionali: i controlli corrispondenti diventano
-  `SKIP` quando il tool non è disponibile.
+- Termux with Bash and coreutils;
+- a `termux-stacks` binary executable for the device architecture;
+- `PREFIX` set by the Termux session;
+- `file` and `readelf` are optional: the corresponding checks become `SKIP`
+  when the tool is unavailable.
 
-Il package `termux-stacks` e l'integrazione runit non sono prerequisiti. I loro
-controlli sono read-only e diventano `SKIP` se il package non è installato.
+The `termux-stacks` package and runit integration are not prerequisites. Their
+checks are read-only and become `SKIP` if the package is not installed.
 
-## Uso
+## Usage
 
-Esecuzione minima:
+Minimal invocation:
 
 ```bash
-bash tests/device/s0.sh --binary /percorso/al/binario/termux-stacks
+bash tests/device/s0.sh --binary /path/to/binary/termux-stacks
 ```
 
-Per scegliere la directory **base** delle evidenze:
+To select the **base** evidence directory:
 
 ```bash
 mkdir -p "$HOME/termux-stacks-evidence"
 bash tests/device/s0.sh \
-  --binary /percorso/al/binario/termux-stacks \
+  --binary /path/to/binary/termux-stacks \
   --output-root "$HOME/termux-stacks-evidence"
 ```
 
-`--output-root` deve indicare una directory assoluta, esistente e scrivibile.
-Senza l'opzione viene usato `TMPDIR`. In entrambi i casi lo script crea con
-`mktemp` una directory privata e univoca `termux-stacks-s0.*`; non riusa né
-sovrascrive una directory precedente.
+`--output-root` must name an absolute, existing, writable directory. Without
+this option, `TMPDIR` is used. In either case, the script uses `mktemp` to
+create a private, unique `termux-stacks-s0.*` directory; it neither reuses nor
+overwrites a previous directory.
 
-Il daemon viene eseguito con un `PREFIX` sintetico sotto il workspace privato
-dell'harness. Il test non crea `state.db`, lock o socket sotto il vero
-`$PREFIX/var` del dispositivo. I segnali TERM e KILL sono inviati soltanto ai
-processi figli avviati dallo script.
+The daemon runs with a synthetic `PREFIX` under the harness's private
+workspace. The test does not create `state.db`, locks, or sockets under the
+device's real `$PREFIX/var`. TERM and KILL signals are sent only to child
+processes started by the script.
 
-## Controlli
+## Checks
 
-S0 copre:
+S0 covers:
 
-1. inventario di Termux, Android, architettura, filesystem e package rilevanti;
-2. `termux-stacks --version` e `--help`;
-3. SHA-256 del binario e, se disponibili, `file` e `readelf`;
-4. creazione dei path privati sotto il prefix sintetico e relativi mode;
-5. esclusione di un secondo daemon tramite lock/socket;
-6. rilascio del lock e recupero dello socket stale dopo TERM;
-7. rilascio del lock e recupero dello socket stale dopo KILL;
-8. ispezione read-only del package e del servizio runit, se installati.
+1. an inventory of Termux, Android, the architecture, filesystem, and relevant
+   packages;
+2. `termux-stacks --version` and `--help`;
+3. the binary's SHA-256 and, when available, `file` and `readelf`;
+4. creation of private paths under the synthetic prefix and their modes;
+5. exclusion of a second daemon through the lock/socket;
+6. lock release and stale-socket recovery after TERM;
+7. lock release and stale-socket recovery after KILL;
+8. read-only inspection of the package and runit service, if installed.
 
-Lo script `s0.sh` non contiene test S1-S4, immagini OCI o operazioni
-`proot-distro`.
+The `s0.sh` script contains no S1–S4 tests, OCI images, or `proot-distro`
+operations.
 
-## Evidenze
+## Evidence
 
-La directory stampata al termine contiene:
+The directory printed at completion contains:
 
 ```text
 evidence/
@@ -79,44 +80,44 @@ evidence/
 └── SHA256SUMS
 ```
 
-`results.tsv` usa gli stati `PASS`, `FAIL` e `SKIP`. Un `FAIL` produce exit
-code `1`; soli `PASS`/`SKIP` producono exit code `0`. `conclusions.md` contiene
-un riepilogo automatico e uno spazio per la revisione manuale. L'harness
-conserva `evidence/` e rimuove soltanto il proprio sottoalbero `work/`.
+`results.tsv` uses the `PASS`, `FAIL`, and `SKIP` states. A `FAIL` produces exit
+code `1`; only `PASS`/`SKIP` results produce exit code `0`. `conclusions.md`
+contains an automatic summary and space for manual review. The harness keeps
+`evidence/` and removes only its own `work/` subtree.
 
-## S1 — Entrypoint e Cmd
+## S1 — Entrypoint and Cmd
 
-S1 attualmente richiede un device Termux aarch64, `proot-distro 5.6.0`, i
-normali tool core Termux e l'immagine
-`alpine:3.24.1` già visibile nella cache locale. Il preflight evita di
-richiedere intenzionalmente un'immagine assente, ma l'inventario quiet non
-prova architettura o completezza della cache e non certifica una build
-offline. L'harness costruisce quattro fixture locali con
-Entrypoint+Cmd, solo Cmd, solo Entrypoint e nessuno dei due:
+S1 currently requires an aarch64 Termux device, `proot-distro 5.6.0`, the
+standard core Termux tools, and the `alpine:3.24.1` image already visible in
+the local cache. The preflight deliberately avoids requesting a missing
+image, but the quiet inventory does not prove the architecture or completeness
+of the cache and does not certify an offline build. The harness builds four
+local fixtures: Entrypoint+Cmd, Cmd only, Entrypoint only, and neither:
 
 ```bash
 mkdir -p "$HOME/termux-stacks-evidence"
 bash tests/device/s1.sh --output-root "$HOME/termux-stacks-evidence"
 ```
 
-Ogni esecuzione genera tag e alias casuali `txs-s1-*`, ne registra l'intent
-prima della creazione e usa soltanto confronti exact-name. Il teardown prova
-la baseline con le interfacce pubbliche, arresta/rimuove solo i propri alias e
-rimuove solo i propri image reference. Non usa mai `clear-cache`, `reset`,
-`remove --all`, glob o un alias preesistente. Se l'inventario diventa ambiguo,
-fallisce senza ampliare il target di cleanup.
+Each run generates random `txs-s1-*` tags and aliases, records their intent
+before creation, and uses exact-name comparisons only. Teardown checks the
+baseline through public interfaces, stops/removes only its own aliases, and
+removes only its own image references. It never uses `clear-cache`,
+`reset`, `remove --all`, globs, or a pre-existing alias. If the inventory
+becomes ambiguous, it fails without broadening the cleanup target.
 
-La matrice verifica default e override per i quattro shape, argv problematici
-in forma esadecimale, working directory, environment, exit status e il confine
-shell di `login`. Non prova registry delle sessioni o segnali: appartengono a
-S2 e S3.
+The matrix verifies defaults and overrides for all four shapes, problematic
+argv values in hexadecimal form, the working directory, environment, exit
+status, and the `login` shell boundary. It does not test the session registry
+or signals; those belong to S2 and S3.
 
 ## S2 — Session registry
 
-S2 richiede un device Termux aarch64 con `proot-distro 5.6.0`, Bash, `jq`,
-`flock`, `setsid` e i normali coreutils. Riceve un OCI archive esterno e il
-suo SHA-256; prima dell'install verifica archive, manifest, config e ogni
-layer, inclusi piattaforma `linux/arm64` ed Entrypoint `/s2-worker`:
+S2 requires an aarch64 Termux device with `proot-distro 5.6.0`, Bash, `jq`,
+`flock`, `setsid`, and the standard coreutils. It receives an external OCI
+archive and its SHA-256; before installation it verifies the archive,
+manifest, config, and every layer, including the `linux/arm64` platform and
+`/s2-worker` Entrypoint:
 
 ```bash
 mkdir -p "$HOME/termux-stacks-evidence"
@@ -126,40 +127,41 @@ bash tests/device/s2.sh \
   --output-root "$HOME/termux-stacks-evidence"
 ```
 
-La fixture si costruisce off-device con Podman/Buildah arm64. Il
-`Containerfile` fissa la base Alpine per digest; l'archive benedetto viene
-prodotto con `podman save --format oci-archive` e resta fuori dal repository.
-Il checksum qualifica quell'artefatto, non promette un tar byte-identico fra
-versioni diverse di Podman.
+The fixture is built off-device with arm64 Podman/Buildah. The `Containerfile`
+pins the Alpine base by digest; the blessed archive is produced with
+`podman save --format oci-archive` and remains outside the repository. The
+checksum qualifies that artifact; it does not promise a byte-identical tar
+across different Podman versions.
 
-Tutte le mutazioni engine usano `TERMUX__PREFIX` e `TERMUX__HOME` sintetici
-dentro la directory privata del run, più `PD_PROOT_BIN` verso il `proot` reale.
-Il preflight deve mostrare la data location sintetica ed essere vuoto prima
-dell'install. Un alias casuale exact-name viene registrato prima dell'effetto;
-il vero runtime viene soltanto controllato con `list --quiet` per escludere la
-collisione. Non vengono usati `clear-cache`, `reset`, target globali o alias
-utente; rootfs e layer importati spariscono rimuovendo il solo sandbox dopo
-aver drenato i processi posseduti.
+All engine mutations use synthetic `TERMUX__PREFIX` and `TERMUX__HOME` values
+inside the run's private directory, plus `PD_PROOT_BIN` pointing to the real
+`proot`. The preflight must show the synthetic data location, and the
+synthetic runtime must be empty before installation. A random exact-name alias
+is recorded before the effect; the real runtime is checked only with
+`list --quiet` to rule out a collision. The harness does not use
+`clear-cache`, `reset`, global targets, or user aliases; imported rootfs
+instances and layers are discarded by removing only the sandbox after all
+owned processes have drained.
 
-La suite copre:
+The suite covers:
 
-1. T1, visibilità positiva e pruning dopo exit normale;
-2. T2, due sessioni indipendenti sullo stesso alias;
-3. F1, registrazione negata;
-4. F2, lettura del registry negata e ripristinata;
-5. F3, record locked troncato sullo stesso inode.
+1. T1, positive visibility and pruning after normal exit;
+2. T2, two independent sessions on the same alias;
+3. F1, denied registration;
+4. F2, denied and restored registry reads;
+5. F3, a locked record truncated on the same inode.
 
-L'oracolo usa il child foreground insieme a boot ID, PID, start time, PGID e
-SID; non è un parser production. S2 non prova tree-kill, perdita del tracer o
-segnali guest: questi casi appartengono a S3. La perdita del vero daemon e la
-reconciliation appartengono al vertical slice S5.
+The oracle uses the foreground child together with boot ID, PID, start time,
+PGID, and SID; it is not a production parser. S2 does not test tree-kill,
+tracer loss, or guest signals: those cases belong to S3. Loss of the real
+daemon and reconciliation belong to the S5 vertical slice.
 
-## S3 — Signal e tree-kill
+## S3 — Signals and tree-kill
 
-S3 richiede lo stesso device aarch64 e la stessa baseline engine di S2. Riceve
-un OCI archive esterno benedetto e verifica piattaforma, manifest, config,
-layer, base e bytes del worker prima di installarlo nel proprio
-`TERMUX__PREFIX` sintetico:
+S3 requires the same aarch64 device and engine baseline as S2. It receives an
+external blessed OCI archive and verifies the platform, manifest, config,
+layers, base, and worker bytes before installing it into its own synthetic
+`TERMUX__PREFIX`:
 
 ```bash
 mkdir -p "$HOME/termux-stacks-evidence"
@@ -169,18 +171,18 @@ bash tests/device/s3.sh \
   --output-root "$HOME/termux-stacks-evidence"
 ```
 
-Il run di accettazione usa il default di 100 cicli. `--stress-cycles 0..100`
-serve soltanto a run diagnostici; un risultato con meno di 100 cicli non
-chiude S3.
+The acceptance run uses the default of 100 cycles. `--stress-cycles 0..100`
+is only for diagnostic runs; a result with fewer than 100 cycles does not
+complete S3.
 
-La suite prova un tree cooperativo, TERM ignorato, un grandchild in una nuova
-sessione, due sessioni sullo stesso alias e guest rimasti vivi dopo il
-SIGKILL del tracer PRoot. Il solo target candidato production è
-`proot-distro kill SESSION_PID`. Il TERM diretto al PGID è un controllo
-negativo; alias, `--all` e PID host non sono fallback.
+The suite tests a cooperative tree, a tree that ignores TERM, a grandchild in
+a new session, two sessions on the same alias, and guests left alive after the
+PRoot tracer receives SIGKILL. The only candidate production target is
+`proot-distro kill SESSION_PID`. Direct TERM to the PGID is a negative
+control; aliases, `--all`, and host PIDs are not fallbacks.
 
-Il drain è PASS soltanto quando ruoli noti, holder del record e tutti i
-PGID/SID qualificati risultano vuoti. In caso ambiguo l'harness attende la TTL,
-fallisce e preserva il sandbox; non amplia mai il target di cleanup. Gli
-eventi e le identità guest vengono copiati nell'evidence prima di rimuovere il
-rootfs.
+Drain is PASS only when known roles, record holders, and all qualified
+PGIDs/SIDs are empty. In an ambiguous case, the harness waits for the TTL,
+fails, and preserves the sandbox; it never broadens the cleanup target. Guest
+events and identities are copied into the evidence before the rootfs is
+removed.

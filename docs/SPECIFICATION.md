@@ -1,79 +1,79 @@
-# Specifica del prodotto Termux Stacks
+# Termux Stacks Product Specification
 
-**Stato:** proposta v0.1; S0–S3 completati, spike S4 aperto
-**Target:** Termux su Android senza root
-**Autorità:** comportamento pubblico del prodotto
+**Status:** v0.1 proposal; S0–S3 completed, S4 spike open
+**Target:** Termux on unrooted Android
+**Authority:** public product behavior
 
-## 1. Definizione
+## 1. Definition
 
-Termux Stacks è un orchestratore locale dichiarativo. Porta più stack di
-servizi verso lo stato desiderato su una singola installazione Termux usando
-`proot-distro` come engine PRoot e runit per mantenere attivo il control
-plane.
+Termux Stacks is a declarative local orchestrator. It brings multiple service
+stacks to their desired state on a single Termux installation, using
+`proot-distro` as the PRoot engine and runit to keep the control plane
+running.
 
-Termux Stacks aggiunge ciò che manca fra un singolo rootfs PRoot e
-un'esperienza Compose essenziale:
+Termux Stacks adds what is missing between a single PRoot rootfs and a
+minimal Compose-like experience:
 
-- un manifest multi-servizio;
-- lifecycle `up`, `down`, `status`, `logs` e `restart`;
-- dipendenze di avvio semplici;
-- rootfs separati, volumi espliciti e log per servizio;
-- restart con backoff;
-- stato durevole e recovery dopo crash del control plane;
-- diagnostica onesta dei limiti Android.
+- a multi-service manifest;
+- `up`, `down`, `status`, `logs`, and `restart` lifecycle operations;
+- simple startup dependencies;
+- separate rootfs instances, explicit volumes, and per-service logs;
+- restart with backoff;
+- durable state and recovery after a control-plane crash;
+- honest diagnostics about Android limitations.
 
-Non reimplementa l'acquisizione OCI durante `install`, l'estrazione del
-rootfs o il tree-kill: li delega alle interfacce pubbliche di
-`proot-distro`.
+It does not reimplement OCI artifact acquisition during `install`, rootfs
+extraction, or tree-kill: it delegates them to the public
+`proot-distro` interfaces.
 
-## 2. Scope v0.1
+## 2. v0.1 Scope
 
-Il vertical slice iniziale supporta un solo stack con un solo servizio. È un
-gate tecnico e non viene presentato come MVP.
+The initial vertical slice supports one stack with one service. It is a
+technical gate and is not presented as an MVP.
 
-L'MVP v0.1 DEVE poi supportare:
+The v0.1 MVP MUST then support:
 
-1. più stack indipendenti sullo stesso dispositivo;
-2. più servizi per stack, una replica per servizio;
-3. un grafo aciclico `dependsOn` che ordina l'avvio;
-4. immagini OCI installabili da `proot-distro`;
-5. `command` come override del Cmd OCI, senza override dell'Entrypoint;
-6. environment letterale;
-7. bind mount espliciti e volumi nominati;
-8. porte TCP fisse su `127.0.0.1`, dichiarative e senza NAT;
-9. restart `no`, `on-failure` e `always`, con backoff limitato;
-10. log su file ed exit status per servizio;
-11. stato desiderato `running | stopped`;
-12. recovery conservativa: restart solo quando assenza o target sono provati,
-    altrimenti `unknown` con diagnostica per l'intervento manuale;
-13. installazione del servizio runit disabilitata per default;
-14. errori espliciti per campi o capability non supportati.
+1. multiple independent stacks on the same device;
+2. multiple services per stack, with one replica per service;
+3. an acyclic `dependsOn` graph that determines startup order;
+4. OCI images installable by `proot-distro`;
+5. `command` as an override of the OCI Cmd, without overriding the Entrypoint;
+6. literal environment variables;
+7. explicit bind mounts and named volumes;
+8. fixed, declarative TCP ports on `127.0.0.1`, without NAT;
+9. `no`, `on-failure`, and `always` restart policies, with bounded backoff;
+10. file-based logs and an exit status for each service;
+11. a `running | stopped` desired state;
+12. conservative recovery: restart only when absence or the target is proven;
+    otherwise, report `unknown` with diagnostics for manual intervention;
+13. runit service installation disabled by default;
+14. explicit errors for unsupported fields or capabilities.
 
-## 3. Non-obiettivi
+## 3. Non-goals
 
-Termux Stacks v0.1 NON promette:
+Termux Stacks v0.1 DOES NOT promise:
 
-- isolamento di sicurezza fra servizi;
-- UID, PID, mount, IPC, UTS o network namespace distinti;
-- cgroup o limiti rigidi di CPU, RAM, I/O e processi;
-- firewall, DNS per servizio, IP virtuali, NAT o port mapping;
-- mount realmente read-only;
-- compatibilità completa con Docker, Dockerfile o Compose;
-- più repliche per servizio;
-- job, migration hook o semantica exactly-once;
-- build OCI;
-- porte automatiche o service discovery tipizzata;
-- secret manager, config manager, cache manager o backup generico;
-- readiness/liveness/startup probe separate;
-- update atomici, zero downtime o rollback dati;
-- funzionamento dopo un force-stop Android;
-- disponibilità continua sotto Doze, pressione memoria o policy OEM;
-- orchestrazione fra dispositivi.
+- security isolation between services;
+- distinct UID, PID, mount, IPC, UTS, or network namespaces;
+- cgroups or hard limits on CPU, RAM, I/O, and processes;
+- a firewall, per-service DNS, virtual IPs, NAT, or port mapping;
+- truly read-only mounts;
+- full compatibility with Docker, Dockerfile, or Compose;
+- multiple replicas per service;
+- jobs, migration hooks, or exactly-once semantics;
+- OCI builds;
+- automatically assigned ports or typed service discovery;
+- a secret manager, configuration manager, cache manager, or generic backup;
+- separate readiness, liveness, and startup probes;
+- atomic updates, zero downtime, or data rollback;
+- operation after an Android force-stop;
+- continuous availability under Doze, memory pressure, or OEM policies;
+- cross-device orchestration.
 
-Queste funzioni richiedono un nuovo milestone e, quando cambiano il contratto,
-un ADR. Non devono essere anticipate con placeholder pubblici.
+These features require a new milestone and, when they change the contract,
+an ADR. They must not be anticipated through public placeholders.
 
-## 4. Modello minimo
+## 4. Minimal Model
 
 ```text
 Stack
@@ -82,141 +82,144 @@ Stack
 │   └── RootfsGeneration
 └── Volume
 
-Operation registra intent e risultato di una mutazione.
+Operation records the intent and result of a mutation.
 ```
 
 ### Stack
 
-È il namespace e l'unità di lifecycle. Il nome è univoco nell'installazione.
+The namespace and lifecycle unit. Its name is unique within the installation.
 
 ### Revision
 
-È una versione sequenziale del manifest accettato dal demone. v0.1 non espone
-digest canonicali, lockfile o revisioni portabili. Una nuova configurazione
-crea una nuova revisione; il commit avviene solo dopo l'avvio riuscito dei
-servizi richiesti.
+A sequential version of the manifest accepted by the daemon. v0.1 does not
+expose canonical digests, lockfiles, or portable revisions. A new
+configuration creates a new revision; it is committed only after all required
+services have started successfully.
 
 ### Service
 
-Descrive un processo long-running. Possiede un rootfs; il demone non ne avvia
-una nuova sessione senza avere escluso una precedente. Processi indipendenti
-devono essere servizi distinti.
+Describes a long-running process. It owns a rootfs; the daemon does not start
+a new session until it has ruled out a previous one. Independent processes
+must be separate services.
 
 ### RootfsGeneration
 
-È un container `proot-distro` con alias Termux Stacks. Non è immutabile:
-il guest può scriverci. Viene riusato nei restart dello stesso servizio e
-sostituito quando cambia l'immagine. Due servizi non condividono mai lo stesso
-rootfs scrivibile.
+A `proot-distro` container with a Termux Stacks alias. It is not immutable:
+the guest may write to it. It is reused when restarting the same service and
+replaced when the image changes. Two services never share the same writable
+rootfs.
 
 ### Operation
 
-Registra almeno stack, tipo, fase, revisione candidata, timestamp e risultato.
-L'intent viene committato prima dell'effetto esterno. Non esiste un secondo
-journal autorevole fuori da SQLite.
+Records at least the stack, type, phase, candidate revision, timestamp, and
+result. The intent is committed before the external effect. There is no
+second authoritative journal outside SQLite.
 
-## 5. Invarianti
+## 5. Invariants
 
-Il runtime DEVE mantenere:
+The runtime MUST maintain:
 
-1. un solo demone mutante per installazione;
-2. una sola mutazione globale in corso;
-3. il demone non avvia intenzionalmente una seconda sessione per
-   stack/servizio e non riavvia quando l'assenza non è provata;
-4. un rootfs scrivibile appartenente a un solo servizio;
-5. nessuna rimozione automatica di un rootfs con ownership ambigua;
-6. intent persistito prima di install, start o stop;
-7. nessuna transazione SQLite aperta mentre attende un comando engine;
-8. PID non usato da solo come prova d'identità;
-9. porta fissa in conflitto trattata come errore;
-10. stato ambiguo trattato come `unknown`, mai come successo;
-11. persistenza garantita solo per volumi e bind dichiarati;
-12. nessuna API viene descritta come secret-safe se può esporre il valore.
+1. at most one mutating daemon per installation;
+2. at most one global mutation in progress;
+3. the daemon does not intentionally start a second session for a
+   stack/service and does not restart when absence has not been proven;
+4. a writable rootfs may belong to at most one service;
+5. no automatic removal of a rootfs with ambiguous ownership;
+6. intent persisted before install, start, or stop;
+7. no SQLite transaction held open while waiting for an engine command;
+8. a PID is never used alone as proof of identity;
+9. a fixed-port conflict is treated as an error;
+10. ambiguous state is treated as `unknown`, never as success;
+11. persistence is guaranteed only for declared volumes and bind mounts;
+12. no API is described as secret-safe if it can expose the value.
 
-Per la baseline `proot-distro 5.6.0`, un `ps --quiet` vuoto con exit 0 non è
-prova d'assenza. Nel demone corrente l'exit del child posseduto è evidenza
-forte; dopo la perdita dell'handle, un registry empty, illeggibile o malformed
-porta a `unknown` e non autorizza un effetto automatico.
+For the `proot-distro 5.6.0` baseline, empty `ps --quiet` output with exit 0
+is not proof of absence. In the current daemon, the exit of an owned child is
+strong evidence; after the handle has been lost, an empty, unreadable, or
+malformed registry results in `unknown` and does not authorize an automatic
+effect.
 
 ## 6. Lifecycle
 
 ### up
 
-`up` valida il manifest, persiste una nuova operazione, prepara i rootfs,
-ferma i servizi sostituiti, avvia la nuova configurazione e infine committa la
-revisione.
+`up` validates the manifest, persists a new operation, prepares the rootfs
+instances, stops replaced services, starts the new configuration, and
+finally commits the revision.
 
 ```text
 PREPARE -> STOP_OLD -> START_NEW -> COMMIT
 ```
 
-v0.1 ammette downtime. Se fallisce prima del commit, il demone tenta di
-ripristinare l'ultima revisione committed. Se l'osservazione è ambigua, marca
-lo stack `unknown` e non procede automaticamente.
+v0.1 allows downtime. If it fails before the commit, the daemon attempts to
+restore the last committed revision. If observation is ambiguous, it marks
+the stack `unknown` and does not proceed automatically.
 
 ### down
 
-`down` persiste `desired=stopped`, termina in ordine inverso i servizi e
-conserva rootfs, log e volumi. La rimozione permanente non fa parte di v0.1.
+`down` persists `desired=stopped`, terminates services in reverse order, and
+retains rootfs instances, logs, and volumes. Permanent removal is not part of
+v0.1.
 
 ```text
 STOP_REQUESTED -> STOPPING -> STOPPED
 ```
 
-Dopo un crash, qualunque fase incompleta conserva `desired=stopped`: il
-demone riprende lo stop solo per target con identità provata.
-Lo stop v0 usa l'identificatore esatto della sessione engine; non segnala il
-PID host, non allarga il target all'alias e non espone una grace configurabile.
-Se la precondizione di identità si perde, il servizio diventa `unknown`.
+After a crash, every incomplete phase retains `desired=stopped`: the daemon
+resumes stopping only for targets with proven identity.
+The v0 stop operation uses the exact engine session identifier; it does not
+signal the host PID, broaden the target to the alias, or expose a configurable
+grace period. If the identity precondition is lost, the service becomes
+`unknown`.
 
 ### restart
 
-`restart` riavvia il processo sullo stesso rootfs. Non crea una revisione e
-non è un metodo di aggiornamento.
+`restart` restarts the process on the same rootfs. It does not create a
+revision and is not an update mechanism.
 
 ```text
 RESTART_REQUESTED -> STOPPING -> STARTING -> RUNNING
 ```
 
-Dopo un crash valgono le stesse regole conservative: nessun nuovo start se
-l'assenza della sessione precedente non è provata.
+After a crash, the same conservative rules apply: no new start if the absence
+of the previous session has not been proven.
 
-## 7. Stato osservato e restart
+## 7. Observed State and Restart
 
-Uno stack è `stopped`, `starting`, `running`, `failed` o `unknown`.
-Un servizio è `absent`, `starting`, `running`, `stopping`,
-`stopped`, `backoff`, `failed` o `unknown`.
+A stack is `stopped`, `starting`, `running`, `failed`, or `unknown`.
+A service is `absent`, `starting`, `running`, `stopping`,
+`stopped`, `backoff`, `failed`, or `unknown`.
 
-La derivazione dello stack è deterministica: `unknown` se un servizio è
-ambiguo; `stopped` se lo stato desiderato è stopped e nessuna sessione è
-attiva; `running` se tutti i servizi richiesti sono running; `failed` se
-un servizio richiesto ha esaurito la restart policy; `starting` negli altri
-casi di convergenza.
+Stack state is derived deterministically: `unknown` if a service is
+ambiguous; `stopped` if the desired state is stopped and no session is
+active; `running` if all required services are running; `failed` if a
+required service has exhausted its restart policy; `starting` in all other
+convergence cases.
 
-`absent` indica che non esiste un rootfs registrato; `stopped` che il rootfs
-esiste e il demone corrente ha osservato l'exit del processo posseduto. Un
-registry semplicemente vuoto dopo cold start non basta a derivare `stopped`.
+`absent` means that no rootfs is registered; `stopped` means that the rootfs
+exists and the current daemon observed the exit of the process it owns. A
+registry that is merely empty after a cold start is not sufficient to derive
+`stopped`.
 
-`running` significa che il processo principale è osservato, non che
-l'applicazione sia pronta. Una porta dichiarata può essere controllata per
-raggiungibilità, ma v0.1 non attribuisce in modo affidabile la proprietà del
-listener a uno specifico processo PRoot.
+`running` means that the main process is observed, not that the application
+is ready. A declared port may be checked for reachability, but v0.1 cannot
+reliably attribute ownership of the listener to a specific PRoot process.
 
-Il backoff deve avere limite massimo e finestra anti crash-loop. I default
-sono dettagli di implementazione finché non vengono misurati su device.
+Backoff must have a maximum limit and an anti-crash-loop window. The defaults
+remain implementation details until they have been measured on a device.
 
-## 8. Rete e storage
+## 8. Networking and Storage
 
-Tutti i servizi usano la rete Android condivisa. La comunicazione locale usa
-`127.0.0.1:<porta-fissa>`; il manifest deve configurare l'applicazione perché
-ascolti realmente su quella porta. La dichiarazione `ports` dichiara e
-verifica best effort, non riserva e non effettua mapping.
+All services use Android's shared network. Local communication uses
+`127.0.0.1:<fixed-port>`; the manifest must configure the application to
+actually listen on that port. The `ports` declaration declares and verifies
+on a best-effort basis; it neither reserves nor maps ports.
 
-Un volume nominato vive sotto lo stato privato Termux Stacks e sopravvive a
-restart, nuova immagine e `down`. Un bind monta un percorso host esplicito.
-Lo storage Android condiviso non viene usato implicitamente.
+A named volume resides in Termux Stacks' private state directory and survives
+restarts, a new image, and `down`. A bind mount mounts an explicit host path.
+Android shared storage is not used implicitly.
 
-## 9. CLI v0.1
+## 9. v0.1 CLI
 
 Vertical slice:
 
@@ -230,42 +233,43 @@ MVP:
 - `logs STACK SERVICE [--tail N]`;
 - `restart STACK SERVICE`.
 
-`logs` restituisce al massimo 200 righe per default e rifiuta una risposta
-oltre il limite del protocollo. v0.1 non offre follow/streaming.
+`logs` returns no more than 200 lines by default and rejects a response that
+exceeds the protocol limit. v0.1 does not provide follow/streaming.
 
-L'abilitazione del service resta a `sv-enable termux-stacksd`; stato e log
-del control plane restano agli strumenti `sv`/runit. `status` mostra stack
-e servizi, quindi non esiste un secondo comando `ps`.
+Service enablement remains `sv-enable termux-stacksd`; control-plane status
+and logs remain available through the `sv`/runit tools. `status` displays
+stacks and services, so there is no second `ps` command.
 
-Le mutazioni passano sempre dal demone. `config validate` è l'unico comando
-garantito offline; non esegue capability probe, pull o controllo delle porte.
-Il demone può rifiutare un manifest sintatticamente valido dopo i preflight.
+Mutations always pass through the daemon. `config validate` is the only
+command guaranteed to work offline; it does not run capability probes, pull
+artifacts, or check ports. The daemon may reject a syntactically valid
+manifest after its preflight checks.
 
-Non sono contratti v0.1: `plan`, `lock`, `pull`, `exec`, `run`,
-`update`, `rollback`, `events`, `backup`, `restore` e `gc`.
+The following are not v0.1 contracts: `plan`, `lock`, `pull`, `exec`, `run`,
+`update`, `rollback`, `events`, `backup`, `restore`, and `gc`.
 
-## 10. Garanzie e limiti Android
+## 10. Guarantees and Android Limitations
 
-| Proprietà | Garanzia v0.1 |
+| Property | v0.1 guarantee |
 |---|---|
-| isolamento fra workload | nessuna |
-| nessun avvio duplicato intenzionale | il demone riavvia solo quando l'assenza precedente è provata |
-| recovery crash demone | stop/recreate solo con evidenza sufficiente; altrimenti `unknown` |
-| persistenza | solo volumi e bind dichiarati |
-| rete privata | nessuna |
-| esposizione default | solo dichiarazioni loopback |
-| reboot | best effort se runit/Termux:Boot sono configurati |
-| force-stop | richiede riapertura manuale di Termux |
-| update | stop/recreate con downtime |
-| rollback | non incluso in v0.1 |
+| isolation between workloads | none |
+| no intentional duplicate start | the daemon restarts only when prior absence is proven |
+| daemon crash recovery | stop/recreate only with sufficient evidence; otherwise `unknown` |
+| persistence | only declared volumes and bind mounts |
+| private network | none |
+| default exposure | loopback declarations only |
+| reboot | best effort if runit/Termux:Boot are configured |
+| force-stop | requires Termux to be reopened manually |
+| update | stop/recreate with downtime |
+| rollback | not included in v0.1 |
 
-I workload devono essere fidati: condividono l'UID Android di Termux e possono
-accedere alle risorse leggibili da quell'UID.
+Workloads must be trusted: they share Termux's Android UID and can access
+resources readable by that UID.
 
-## 11. Criterio di successo
+## 11. Success Criterion
 
-v0.1 è pronta soltanto quando più stack multi-servizio eseguono cicli
-`up/status/logs/restart/down` su Android aarch64, i volumi sopravvivono,
-nessun rootfs è condiviso e una campagna di kill/restart del demone non crea
-duplicati osservabili. Un limite dell'engine che impedisca questa proprietà
-deve ridurre la garanzia pubblica o fermare il milestone.
+v0.1 is ready only when multiple multi-service stacks complete
+`up/status/logs/restart/down` cycles on Android aarch64, volumes survive,
+no rootfs is shared, and a daemon kill/restart campaign creates no observable
+duplicates. An engine limitation that prevents this property must reduce the
+public guarantee or stop the milestone.

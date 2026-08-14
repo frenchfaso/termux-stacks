@@ -1,48 +1,47 @@
-# Packaging Termux
+# Termux packaging
 
-**Stato:** percorso pre-release, non ricetta ufficiale
-**Fonti verificate:** 2026-08-14
+**Status:** pre-release path, not an official recipe
+**Sources verified:** 2026-08-14
 
-## 1. Esito
+## 1. Outcome
 
-Termux Stacks è tecnicamente adatto a un package Termux non-root nel canale
-`main`, ma un progetto nuovo non soddisfa ancora automaticamente i criteri
-di ammissione. Il percorso realistico è:
+Termux Stacks is technically suitable for a non-root Termux package in the
+`main` channel, but a new project does not yet automatically meet the
+acceptance criteria. The realistic path is:
 
-1. build upstream e test su device;
-2. release pubbliche e utenti reali;
-3. eventualmente TUR;
+1. upstream build and on-device tests;
+2. public releases and real users;
+3. optionally TUR;
 4. package request;
 5. recipe in `termux/termux-packages/packages/termux-stacks/`.
 
-Solo la recipe dentro `termux/termux-packages` è canonica. Una
-`packaging/termux/build.sh.fixture` upstream è un test/template e deve
-dichiararlo chiaramente.
+Only the recipe inside `termux/termux-packages` is canonical. An upstream
+`packaging/termux/build.sh.fixture` is a test/template and must clearly say so.
 
-## 2. Blocker di candidatura
+## 2. Candidate blockers
 
-La policy ufficiale richiede, fra l'altro, progetto attivo/conosciuto,
-licenza open source riconosciuta, package sotto 100 MiB e non duplicazione.
-Indica inoltre che software normalmente installabile con package manager di
-linguaggio, incluso `cargo`, dovrebbe usare quel canale.
+The official policy requires, among other things, an active/well-known project,
+a recognized open-source license, a package under 100 MiB, and no duplication.
+It also states that software normally installable through a language package
+manager, including `cargo`, should use that channel.
 
-Prima di una proposta servono quindi:
+Before submitting a proposal, the project therefore needs:
 
-- licenza Apache-2.0 e file `LICENSE`;
-- tag/release e source archive immutabili;
-- community e manutenzione dimostrabili;
-- differenza chiara da `proot-distro` e `docker-compose`;
-- nessuna istruzione `cargo install` come canale utente;
-- motivazione dell'integrazione Termux-specifica: prefix, runit,
-  `proot-distro`, Bionic e lifecycle Android;
-- feedback dei maintainer sull'uso di “Termux” nel nome;
-- build e test sulle quattro architetture;
-- dimensione package misurata.
+- the Apache-2.0 license and a `LICENSE` file;
+- immutable tags/releases and source archives;
+- demonstrable community adoption and maintenance;
+- a clear distinction from `proot-distro` and `docker-compose`;
+- no instructions promoting `cargo install` as the user installation channel;
+- a rationale for the Termux-specific integration: prefix, runit,
+  `proot-distro`, Bionic, and the Android lifecycle;
+- maintainer feedback on using “Termux” in the name;
+- builds and tests on all four architectures;
+- measured package size.
 
-Il rischio maggiore di ammissione è maturità/duplicazione percepita, non Rust.
-Una recipe corretta non garantisce l'inclusione.
+The greatest acceptance risk is perceived maturity/duplication, not Rust. A
+correct recipe does not guarantee inclusion.
 
-## 3. Layout upstream
+## 3. Upstream layout
 
 ```text
 termux-stacks/
@@ -57,26 +56,26 @@ termux-stacks/
     └── build.sh.fixture
 ```
 
-Requisiti:
+Requirements:
 
-- un package Cargo, un binario, `publish = false`;
-- `Cargo.lock` committato;
-- `rust-version = 1.93`; il package Rust ufficiale era 1.97.1 alla verifica;
-- build da source archive senza repository Git;
-- nessun path FHS hardcoded;
-- prefix configurabile in test;
-- nessun download di dipendenze o self-update in post-install, avvio o
-  runtime; `up` può acquisire esplicitamente un'immagine OCI;
-- nessuna crate venduta come binario opaco.
+- one Cargo package, one binary, `publish = false`;
+- committed `Cargo.lock`;
+- `rust-version = 1.93`; the official Rust package was 1.97.1 when verified;
+- build from a source archive without a Git repository;
+- no hardcoded FHS paths;
+- a configurable prefix in tests;
+- no dependency downloads or self-updates during post-install, startup, or
+  runtime; `up` may explicitly acquire an OCI image;
+- no crate shipped as an opaque binary.
 
-Il builder può scaricare toolchain/crate secondo l'infrastruttura Termux.
-`termux_setup_rust` stesso installa il toolchain nel cross-build: non si
-deve quindi promettere una build completamente offline se non si introduce
-vendoring deliberato.
+The builder may download toolchains/crates as allowed by the Termux
+infrastructure. `termux_setup_rust` itself installs the toolchain during the
+cross-build, so the project must not promise a fully offline build unless it
+deliberately introduces vendoring.
 
-## 4. Recipe sperimentale
+## 4. Experimental recipe
 
-Scheletro da completare dopo tag, licenza e spike delle dipendenze:
+Skeleton to complete after the tag, license, and dependency spikes:
 
 ```bash
 TERMUX_PKG_HOMEPAGE=https://github.com/frenchfaso/termux-stacks
@@ -97,24 +96,24 @@ termux_step_pre_configure() {
 }
 ```
 
-Note:
+Notes:
 
-- versione/tag e checksum sono placeholder finché non esiste una release;
-- lo scaffold S0 dipende solo da `termux-services`; aggiungere
-  `proot-distro (>= 5.6.0)` quando entra l'adapter engine in S5, non prima;
-- se SQLite usa la libreria di sistema, aggiungere `libsqlite` alle
-  dipendenze e verificare l'ELF; non basta dichiararla;
-- se una crate abilita SQLite bundled, la decisione richiede ADR e audit CVE;
-- il build/install Cargo standard di `termux-packages` usa `--locked`,
-  target e job configurati; la struttura single-package evita selezioni
-  custom;
-- non si installa un binario `termux-stacksd`.
+- version/tag and checksum remain placeholders until a release exists;
+- the S0 scaffold depends only on `termux-services`; add
+  `proot-distro (>= 5.6.0)` when the engine adapter enters S5, not before;
+- if SQLite uses the system library, add `libsqlite` to the dependencies and
+  inspect the ELF; declaring it is not enough;
+- if a crate enables bundled SQLite, the decision requires an ADR and CVE
+  audit;
+- the standard Cargo build/install path in `termux-packages` uses `--locked`
+  with configured targets and jobs; the single-package structure avoids custom
+  selection;
+- do not install a `termux-stacksd` binary.
 
-L'helper ufficiale per i service script crea il file `down`, quindi il
-servizio è installato disabilitato. Il comando utente è
-`sv-enable termux-stacksd`.
+The official service-script helper creates the `down` file, so the installed
+service is disabled. The user command is `sv-enable termux-stacksd`.
 
-## 5. Layout installato
+## 5. Installed layout
 
 ```text
 $PREFIX/
@@ -123,127 +122,131 @@ $PREFIX/
 │   ├── run
 │   ├── down
 │   └── log/run
-├── var/lib/termux-stacks/       # creato a runtime
-└── var/run/termux-stacks/       # effimero
+├── var/lib/termux-stacks/       # created at runtime
+└── var/run/termux-stacks/       # ephemeral
     ├── daemon.lock
     └── daemon.sock
 ```
 
-Regole:
+Rules:
 
-- database, volumi e log non sono file posseduti dal package e sopravvivono
-  agli upgrade/remove ordinari;
-- lock file e socket vengono ricreati; il lock autorevole è quello kernel,
-  non il contenuto del file;
-- nessuno stato durevole vive in `$HOME` o shared storage;
-- il runtime non legge internals in `$PREFIX/var/lib/proot-distro`;
-- una purge esplicita futura deve mostrare target e richiedere consenso.
+- the database, volumes, and logs are not package-owned files and survive
+  ordinary upgrades/removal;
+- the lock file and socket are recreated; the authoritative lock is the kernel
+  lock, not the file contents;
+- no durable state lives in `$HOME` or shared storage;
+- the runtime does not read internals under `$PREFIX/var/lib/proot-distro`;
+- a future explicit purge must show its targets and require consent.
 
-## 6. Servizio, installazione e upgrade
+## 6. Service, installation, and upgrade
 
-Runit esegue il daemon foreground. Stderr confluisce nello stream di logging
-del servizio. Il post-install non abilita né avvia il servizio e non esegue
-migrazioni lunghe.
+Runit executes the daemon in the foreground. Stderr is redirected into the
+service logging stream. Post-install neither enables nor starts the service and
+does not perform long migrations.
 
-Alla prima installazione di `termux-services`, l'utente deve riavviare la
-shell perché parta `service-daemon`. Questo è un prerequisito operativo
-documentato, non un comportamento controllato da Termux Stacks.
+After the first installation of `termux-services`, the user must restart the
+shell so that `service-daemon` starts. This is a documented operational
+prerequisite, not behavior controlled by Termux Stacks.
 
-Dopo upgrade, il vecchio processo può continuare a eseguire l'ELF già
-mappato. CLI e daemon includono una versione esatta di protocollo:
+After an upgrade, the old process may continue executing the already mapped
+ELF. The CLI and daemon include an exact protocol version:
 
-- compatibili: procedono;
-- incompatibili: fail fast con `sv restart termux-stacksd`;
-- nessun restart automatico dal post-install.
+- compatible: proceed;
+- incompatible: fail fast with `sv restart termux-stacksd`;
+- no automatic restart from post-install.
 
-Prima del primo upgrade di formato supportato, il daemon crea un DB vuoto,
-accetta solo la versione esatta e conserva senza modifiche uno schema
-sconosciuto. Backup/migrazioni entrano con la prima transizione reale.
+Before the first supported format upgrade, the daemon creates an empty DB,
+accepts only the exact version, and preserves an unknown schema unchanged.
+Backups/migrations enter with the first real transition.
 
-La rimozione è distinta dall'upgrade. Un `prerm` futuro deve, soltanto nella
-vera rimozione:
+Removal is distinct from upgrade. A future `prerm` must, only during actual
+removal:
 
-1. eseguire best effort `sv-disable termux-stacksd`/`sv down`;
-2. impedire retry runit verso un ELF rimosso;
-3. non cancellare database, volumi, log o rootfs.
+1. run best-effort `sv-disable termux-stacksd`/`sv down`;
+2. prevent runit from retrying an executable that has been removed;
+3. not delete the database, volumes, logs, or rootfs.
 
-La semantica precisa Debian/pacman va implementata e testata nella fixture,
-inclusi servizio enabled, disabled e upgrade, prima del gate package.
+The precise Debian/pacman semantics must be implemented and tested in the
+fixture, including enabled service, disabled service, and upgrade, before the
+package gate.
 
-## 7. CI e device test
+## 7. CI and device tests
 
-Upstream per ogni change:
+Upstream, for every change:
 
 - `cargo fmt --all -- --check`;
 - `cargo clippy --all-targets --locked -- -D warnings`;
 - `cargo test --locked`;
-- test fake-engine e fixture manifest.
+- fake-engine tests and manifest fixtures.
 
-Dopo scelta delle crate native:
+After selecting the native crates:
 
-- build package `aarch64`, `arm`, `i686`, `x86_64`;
-- verifica `Cargo.lock`;
-- audit licenze/advisory;
-- `readelf`/equivalente su NEEDED e dipendenze dichiarate;
-- dimensione `.deb` e installata;
-- build pulita con le modalità CI Termux previste;
-- installazione del `.deb` in un Termux pulito, con dipendenze risolte dal
-  package manager.
+- build the package for `aarch64`, `arm`, `i686`, and `x86_64`;
+- verify `Cargo.lock`;
+- audit licenses/advisories;
+- use `readelf` or equivalent to inspect NEEDED entries and declared
+  dependencies;
+- measure `.deb` and installed sizes;
+- perform a clean build using the intended Termux CI modes;
+- install the `.deb` in a clean Termux environment, with dependencies resolved
+  by the package manager.
 
-Su almeno un device aarch64:
+On at least one aarch64 device:
 
-1. installare il package;
-2. verificare che `termux-stacksd/down` esista;
-3. abilitare e controllare log/stato;
-4. eseguire gli spike engine;
-5. provare upgrade con daemon vivo;
-6. provare kill -9, disk full controllato e recovery;
-7. verificare remove con servizio enabled/disabled e che i dati sopravvivano.
+1. install the package;
+2. verify that `termux-stacksd/down` exists;
+3. enable the service and inspect logs/status;
+4. run the engine spikes;
+5. test upgrade with a live daemon;
+6. test kill -9, controlled disk full, and recovery;
+7. test removal with the service enabled/disabled and verify that data
+   survives.
 
-Per il solo gate S0 è documentato un fallback nativo minimale in
-[`packaging/termux/README.md`](../packaging/termux/README.md). Salta la
-risoluzione delle dipendenze soltanto dopo un preflight esplicito e usa un
-collector allowlist, perché il builder on-device opera sul vero `$PREFIX`.
-Non sostituisce la build off-device richiesta per release e proposta ufficiale.
+For the S0 gate only, a minimal native fallback is documented in
+[`packaging/termux/README.md`](../packaging/termux/README.md). It skips
+dependency resolution only after an explicit preflight and uses an allowlist
+collector because the on-device builder operates on the real `$PREFIX`. It
+does not replace the off-device build required for releases and the official
+proposal.
 
-Reboot, Doze, force-stop e più device diventano gate RC, non del primo
-binario.
+Reboot, Doze, force-stop, and multiple devices become RC gates, not gates for
+the first binary.
 
 ## 8. Termux:Boot
 
-Termux:Boot è opzionale e non una dipendenza del package. L'add-on deve
-provenire da una sorgente/firma compatibile con l'app Termux, essere aperto
-almeno una volta e ricevere uno script eseguibile sotto `~/.termux/boot/`.
-La configurazione raccomandata fa avviare allo script l'infrastruttura
-`termux-services`; runit decide quali service senza file `down` avviare.
+Termux:Boot is optional and is not a package dependency. The add-on must come
+from a source/signature compatible with the Termux app, be opened at least
+once, and receive an executable script under `~/.termux/boot/`. The recommended
+configuration has that script start the `termux-services` infrastructure;
+runit decides which services without a `down` file to start.
 
-Termux:Boot è un launcher one-shot, non un watchdog. Dopo force-stop Android
-l'utente deve riaprire Termux. Wake lock e boot sono scelte esplicite
-dell'utente.
+Termux:Boot is a one-shot launcher, not a watchdog. After Android force-stops
+the app, the user must reopen Termux. Wake lock and boot are explicit user
+choices.
 
-## 9. Checklist per proposta ufficiale
+## 9. Official proposal checklist
 
-- [ ] nome approvato o rinominato prima dei path stabili;
-- [x] licenza SPDX Apache-2.0;
-- [ ] progetto attivo, release e utenti;
-- [ ] source archive/tag/checksum immutabili;
-- [ ] differenza da engine e Compose documentata;
-- [ ] nessun `cargo install` promosso;
-- [ ] build quattro architetture;
-- [ ] package sotto 100 MiB con margine;
-- [ ] servizio disabilitato per default;
-- [ ] upgrade e rimozione conservano stato;
-- [ ] maintainer disponibile;
-- [ ] package request raccomandata prima della PR;
-- [ ] recipe ufficiale mantenuta solo in `termux-packages`.
+- [ ] name approved or changed before stable paths;
+- [x] SPDX license Apache-2.0;
+- [ ] active project, releases, and users;
+- [ ] immutable source archive/tag/checksum;
+- [ ] distinction from the engine and Compose documented;
+- [ ] no promotion of `cargo install`;
+- [ ] four-architecture build;
+- [ ] package under 100 MiB with margin;
+- [ ] service disabled by default;
+- [ ] upgrade and removal preserve state;
+- [ ] maintainer available;
+- [ ] package request recommended before the PR;
+- [ ] official recipe maintained only in `termux-packages`.
 
-## 10. Fonti
+## 10. Sources
 
 - [Packaging policy](https://github.com/termux/termux-packages/blob/master/CONTRIBUTING.md#packaging-policy)
-- [Creare un package](https://github.com/termux/termux-packages/wiki/Creating-new-package)
-- [Build dei package](https://github.com/termux/termux-packages/wiki/Building-packages)
-- [Helper Rust](https://github.com/termux/termux-packages/blob/master/scripts/build/setup/termux_setup_rust.sh)
-- [Installazione service script](https://github.com/termux/termux-packages/blob/master/scripts/build/termux_step_install_service_scripts.sh)
+- [Creating a package](https://github.com/termux/termux-packages/wiki/Creating-new-package)
+- [Building packages](https://github.com/termux/termux-packages/wiki/Building-packages)
+- [Rust helper](https://github.com/termux/termux-packages/blob/master/scripts/build/setup/termux_setup_rust.sh)
+- [Service-script installation](https://github.com/termux/termux-packages/blob/master/scripts/build/termux_step_install_service_scripts.sh)
 - [termux-services](https://github.com/termux/termux-services)
-- [Recipe proot-distro](https://github.com/termux/termux-packages/blob/master/packages/proot-distro/build.sh)
+- [proot-distro recipe](https://github.com/termux/termux-packages/blob/master/packages/proot-distro/build.sh)
 - [PRoot-Distro v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/README.md)

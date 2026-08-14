@@ -1,29 +1,30 @@
-# Specifica del manifest Termux Stacks
+# Termux Stacks Manifest Specification
 
-**Stato:** proposta v0.1; parser non ancora implementato
+**Status:** v0.1 proposal; parser not yet implemented
 **Schema:** `termux-stacks/v1alpha1`
-**Autorità:** sintassi e semantica del manifest
+**Authority:** manifest syntax and semantics
 
-## 1. Principi
+## 1. Principles
 
-Il manifest descrive ciò che Termux/PRoot può applicare davvero. Non copia
-campi Compose privi di semantica affidabile su Android.
+The manifest describes what Termux/PRoot can actually enforce. It does not
+copy Compose fields that have no reliable semantics on Android.
 
-Il parser DEVE:
+The parser MUST:
 
-- accettare un solo documento YAML;
-- rifiutare tag custom, merge key, anchor, alias e chiavi duplicate;
-- rifiutare campi sconosciuti;
-- imporre limiti a file, nesting, collezioni e scalari;
-- produrre errori con percorso del campo e, quando disponibile, linea/colonna;
-- non eseguire interpolazione, include o comandi.
+- accept exactly one YAML document;
+- reject custom tags, merge keys, anchors, aliases, and duplicate keys;
+- reject unknown fields;
+- enforce limits on file size, nesting, collections, and scalars;
+- produce errors that include the field path and, when available, line and
+  column;
+- never perform interpolation, includes, or command execution.
 
-Non esistono in v0.1 variabili, estensioni `x-*`, canonicalizzazione pubblica,
-digest del manifest o lockfile.
+v0.1 has no variables, `x-*` extensions, public canonicalization, manifest
+digest, or lockfile.
 
-## 2. Profilo vertical slice
+## 2. Vertical Slice Profile
 
-Il primo slice accetta esattamente un servizio e questi soli campi:
+The first slice accepts exactly one service and only the following fields:
 
 ```yaml
 apiVersion: termux-stacks/v1alpha1
@@ -36,15 +37,15 @@ services:
     command: ["/bin/sh", "-c", "while true; do date; sleep 5; done"]
 ```
 
-La semantica di `command` è stata verificata dallo spike S1 su
-`proot-distro 5.6.0`. È un override del solo OCI `Cmd`: non sostituisce
-`Entrypoint` e non è un raw exec indipendente dall'immagine. Il runtime deve
-fallire chiuso se il capability probe non conferma questo contratto.
+The semantics of `command` were verified by the S1 spike on
+`proot-distro 5.6.0`. It overrides only the OCI `Cmd`: it does not replace the
+`Entrypoint` and is not a raw exec independent of the image. The runtime must
+fail closed if the capability probe does not confirm this contract.
 
-Qualunque campo MVP non ancora implementato deve produrre `unsupported`, non
-essere ignorato.
+Any MVP field that has not yet been implemented must produce `unsupported`,
+not be ignored.
 
-## 3. Schema MVP
+## 3. MVP Schema
 
 ```yaml
 apiVersion: termux-stacks/v1alpha1
@@ -79,84 +80,87 @@ volumes:
   data: {}
 ```
 
-Campi top-level ammessi:
+Allowed top-level fields:
 
-| Campo | Tipo | Obbligatorio |
+| Field | Type | Required |
 |---|---|---|
-| `apiVersion` | stringa esatta | sì |
-| `kind` | stringa esatta `Stack` | sì |
-| `metadata.name` | nome | sì |
-| `services` | mappa non vuota | sì |
-| `volumes` | mappa | no |
+| `apiVersion` | exact string | yes |
+| `kind` | exact string `Stack` | yes |
+| `metadata.name` | name | yes |
+| `services` | non-empty map | yes |
+| `volumes` | map | no |
 
-## 4. Nomi
+## 4. Names
 
-Nomi di stack, servizio e volume:
+Stack, service, and volume names:
 
-- corrispondono a `^[a-z][a-z0-9-]{0,47}$`;
-- sono case-sensitive ma ammettono solo minuscole;
-- non possono iniziare con `termux-stacks-`;
-- sono univoci nel proprio namespace.
+- match `^[a-z][a-z0-9-]{0,47}$`;
+- are case-sensitive but allow only lowercase characters;
+- cannot begin with `termux-stacks-`;
+- are unique within their respective namespace.
 
-Il runtime non usa il nome direttamente come path o alias engine: applica
-escaping e un identificatore d'installazione.
+The runtime does not use the name directly as a path or engine alias: it
+applies escaping and an installation identifier.
 
-## 5. Servizi
+## 5. Services
 
-Ogni servizio ammette:
+Each service accepts:
 
-| Campo | Tipo | Default |
+| Field | Type | Default |
 |---|---|---|
-| `image` | stringa non vuota | obbligatorio |
-| `command` | array non vuoto di stringhe, primo elemento non vuoto | assente: comando OCI |
-| `environment` | mappa stringa→stringa | `{}` |
-| `mounts` | array di mount | `[]` |
-| `ports` | array di porta | `[]` |
-| `dependsOn` | array di nomi servizio | `[]` |
+| `image` | non-empty string | required |
+| `command` | non-empty array of strings; first element non-empty | absent: OCI command |
+| `environment` | string-to-string map | `{}` |
+| `mounts` | array of mounts | `[]` |
+| `ports` | array of ports | `[]` |
+| `dependsOn` | array of service names | `[]` |
 | `restart` | enum | `no` |
 
-Un servizio rappresenta un processo foreground. Se l'applicazione daemonizza
-e il processo principale termina, il servizio è terminato.
+A service represents a foreground process. If the application daemonizes and
+the main process exits, the service has terminated.
 
-## 6. Immagine e command
+## 6. Image and Command
 
-`image` identifica un'immagine da registry OCI oppure un OCI image archive
-locale accettato da `proot-distro install`. Un rootfs tar plain è rifiutato:
-non contiene il manifest richiesto da `proot-distro run`. v0.1 non offre una
-policy di pull, non promette risoluzione a digest e non modifica la cache
-globale di immagini per forzare un refresh.
+`image` identifies either an image from an OCI registry or a local OCI image
+archive accepted by `proot-distro install`. A plain rootfs tar is rejected: it
+does not contain the manifest required by `proot-distro run`. v0.1 provides no
+pull policy, does not promise digest resolution, and does not modify the global
+image cache to force a refresh.
 
-Il percorso raccomandato per test riproducibili è un OCI archive locale o un
-tag immutabile controllato. Tag mutabili sono accettabili solo dichiarando che
-una successiva installazione può usare la cache.
+The recommended path for reproducible tests is a local OCI archive or a
+controlled immutable tag. Mutable tags are acceptable only with an explicit
+acknowledgement that a subsequent installation may use the cache.
 
-La CLI pubblica di `proot-distro`, verificata su device in S1, definisce
-questa semantica:
+The public `proot-distro` CLI, verified on-device in S1, defines these
+semantics:
 
-- se `command` è assente, l'adapter omette `--`: `run` esegue Entrypoint +
-  Cmd, il solo Cmd o il solo Entrypoint; fallisce se entrambi mancano;
-- se `command` è presente, l'adapter emette un solo `--` seguito dagli
-  elementi distinti: l'array sostituisce Cmd ma conserva Entrypoint;
-- senza Entrypoint, il primo elemento non vuoto di `command` è il programma;
-- `command: []` è invalido: `run ALIAS --` equivale a nessun override e non
-  può rappresentare “svuota Cmd”;
-- v0.1 non offre né clear-Cmd né override generico dell'Entrypoint.
+- if `command` is absent, the adapter omits `--`: `run` executes Entrypoint +
+  Cmd, Cmd alone, or Entrypoint alone; it fails if both are absent;
+- if `command` is present, the adapter emits exactly one `--`, followed by each
+  element as a separate argument: the array replaces Cmd but preserves
+  Entrypoint;
+- without an Entrypoint, the first non-empty element of `command` is the
+  program;
+- `command: []` is invalid: `run ALIAS --` is equivalent to no override and
+  cannot represent “clear Cmd”;
+- v0.1 provides neither clear-Cmd nor a generic Entrypoint override.
 
-L'adapter costruisce un vettore argv: non concatena, interpreta, espande né
-aggiunge una shell. Spazi, stringhe vuote successive al primo elemento,
-metacaratteri e argomenti che iniziano con `-` restano letterali. L'immagine
-può naturalmente scegliere una shell nel proprio Entrypoint/Cmd o shebang.
+The adapter constructs an argv vector: it does not concatenate, interpret,
+expand, or add a shell. Spaces, empty strings after the first element,
+metacharacters, and arguments beginning with `-` remain literal. The image may
+naturally choose a shell in its own Entrypoint/Cmd or shebang.
 
-v0.1 non espone `workingDirectory`; l'adapter non passa `--work-dir`. Resta
-quindi attivo l'OCI `WorkingDir`, con fallback engine a `/`.
+v0.1 does not expose `workingDirectory`; the adapter does not pass
+`--work-dir`. The OCI `WorkingDir` therefore remains active, with the engine
+falling back to `/`.
 
 ## 7. Environment
 
-`environment` contiene solo valori letterali. Nomi variabile:
+`environment` contains literal values only. Variable names match:
 `^[A-Za-z_][A-Za-z0-9_]*$`.
 
-v0.1 rifiuta le chiavi che `proot-distro` filtra, riscrive o usa per il
-proprio funzionamento:
+v0.1 rejects keys that `proot-distro` filters, rewrites, or uses for its own
+operation:
 
 ```text
 ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT
@@ -165,27 +169,27 @@ DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE HOME USER TERM COLORTERM PREFIX TMPDIR
 MOZ_FAKE_NO_SANDBOX PULSE_SERVER
 ```
 
-Sono inoltre riservate tutte le chiavi che iniziano con `PROOT_` o `LD_`,
-incluse quelle non note alla versione corrente dell'adapter.
+All keys beginning with `PROOT_` or `LD_` are also reserved, including keys
+unknown to the adapter's current version.
 
-Il capability profile può estendere questa lista per una futura versione
-engine, mai ridurla silenziosamente. La restrizione conserva la stessa
-semantica fra immagini Linux normali e rootfs riconosciuti come Termux.
+The capability profile may extend this list for a future engine version, but
+must never reduce it silently. This restriction preserves the same semantics
+between ordinary Linux images and rootfs images recognized as Termux.
 
-Secret, riferimenti a file, interpolazione host e `fromEndpoint` non sono
-supportati. In particolare, la CLI pubblica dell'engine passa `--env K=V`
-nel proprio argv host; quindi v0.1 non accetta una funzionalità secret che
-prometterebbe di non apparire negli argv.
+Secrets, file references, host interpolation, and `fromEndpoint` are not
+supported. In particular, the engine's public CLI passes `--env K=V` in its
+host argv; v0.1 therefore does not accept a secret feature that would promise
+not to appear in argv.
 
-Ogni coppia letterale non riservata viene passata come un distinto
-`--env K=V`, senza shell. Per queste chiavi il valore del manifest sostituisce
-l'omonimo OCI `Env`; le altre variabili OCI non riservate rimangono
-disponibili. S1 ha verificato override e aggiunta con due chiavi ordinarie;
-non generalizza il risultato alle chiavi gestite dall'engine.
+Each non-reserved literal key-value pair is passed as a separate `--env K=V`,
+without a shell. For these keys, the manifest value replaces the OCI `Env`
+entry with the same name; other non-reserved OCI variables remain available.
+S1 verified override and addition with two ordinary keys; it does not
+generalize that result to keys managed by the engine.
 
-## 8. Mount e volumi
+## 8. Mounts and Volumes
 
-Mount volume:
+Volume mount:
 
 ```yaml
 mounts:
@@ -194,7 +198,7 @@ mounts:
     target: /data
 ```
 
-Mount bind:
+Bind mount:
 
 ```yaml
 mounts:
@@ -203,21 +207,21 @@ mounts:
     target: /app/config
 ```
 
-Regole:
+Rules:
 
-- `type` è `volume` o `bind`;
-- `target` è assoluto, normalizzato e non contiene `..`;
-- un volume deve essere dichiarato top-level;
-- un bind relativo viene risolto rispetto alla directory del manifest;
-- la sorgente deve esistere; la destinazione viene validata nei limiti
-  esposti dall'engine;
-- destinazioni duplicate o sovrapposte vengono rifiutate;
-- non esiste un flag `readOnly`: PRoot non lo garantisce.
+- `type` is `volume` or `bind`;
+- `target` is absolute, normalized, and does not contain `..`;
+- a volume must be declared at the top level;
+- a relative bind source is resolved against the manifest directory;
+- the source must exist; the destination is validated within the limits
+  exposed by the engine;
+- duplicate or overlapping destinations are rejected;
+- there is no `readOnly` flag: PRoot does not guarantee it.
 
-Un volume dichiarato è una directory privata gestita da Termux Stacks. Il
-manifest v0.1 non espone driver, quota, backup o lifecycle policy.
+A declared volume is a private directory managed by Termux Stacks. The v0.1
+manifest does not expose drivers, quotas, backup, or lifecycle policies.
 
-## 9. Porte
+## 9. Ports
 
 ```yaml
 ports:
@@ -225,65 +229,66 @@ ports:
     port: 8080
 ```
 
-Solo `127.0.0.1` è ammesso e `port` è un intero 1024–65535. Una porta può
-essere dichiarata da un solo servizio del manifest. Il demone esegue un
-preflight best effort; una collisione produce errore e non viene riallocata.
+Only `127.0.0.1` is allowed, and `port` is an integer from 1024 to 65535. A
+port may be declared by only one service in the manifest. The daemon performs
+a best-effort preflight; a collision produces an error and is not reallocated.
 
-Questo campo non configura il processo, non crea NAT e non prova ownership del
-listener. Il comando o environment del workload deve usare la stessa porta.
-Porte automatiche, LAN, socket Unix dichiarativi e discovery sono differiti.
+This field does not configure the process, create NAT, or prove ownership of
+the listener. The workload command or environment must use the same port.
+Automatic ports, LAN access, declarative Unix sockets, and discovery are
+deferred.
 
-## 10. Dipendenze
+## 10. Dependencies
 
-`dependsOn` è un array di servizi. Il grafo deve essere aciclico. L'avvio di
-un servizio dipendente attende che il processo del predecessore sia osservato
-vivo; non implica readiness applicativa. Lo stop usa l'ordine inverso.
+`dependsOn` is an array of services. The graph must be acyclic. Starting a
+dependent service waits until the predecessor process is observed alive; this
+does not imply application readiness. Stop uses the reverse order.
 
-Un failure del predecessore prima dell'avvio impedisce l'avvio dei dipendenti
-e rende lo stack `failed`. Dopo che il dipendente è partito, un exit del
-predecessore non lo arresta automaticamente; la restart policy del
-predecessore opera indipendentemente.
+If the predecessor fails before a dependent service starts, that service is
+not started and the stack becomes `failed`. After the dependent service has
+started, an exit of the predecessor does not stop it automatically; the
+predecessor's restart policy operates independently.
 
 ## 11. Restart
 
-Valori ammessi:
+Allowed values:
 
-- `no`: nessun restart automatico;
-- `on-failure`: restart solo per exit non zero o segnale;
-- `always`: restart finché lo stato desiderato è `running`.
+- `no`: no automatic restart;
+- `on-failure`: restart only after a non-zero exit or a signal;
+- `always`: restart while the desired state is `running`.
 
-Backoff, finestra e limite sono inizialmente default interni misurati su
-device. Non sono ancora configurabili nel manifest.
+Backoff, window, and limit initially use internal defaults measured on-device.
+They are not yet configurable in the manifest.
 
-## 12. Validazione
+## 12. Validation
 
-`config validate` esegue offline:
+`config validate` performs the following offline:
 
-- parsing ristretto e schema;
-- nomi e riferimenti;
-- `command` assente oppure array non vuoto con primo elemento non vuoto;
-- nomi environment validi e non riservati all'engine;
-- path e tipi verificabili senza effetti;
-- ciclo delle dipendenze;
-- conflitti interni fra mount e porte.
+- restricted parsing and schema validation;
+- names and references;
+- `command` absent or a non-empty array with a non-empty first element;
+- environment names that are valid and not reserved by the engine;
+- paths and types that can be verified without side effects;
+- dependency cycle detection;
+- internal mount and port conflicts.
 
-`up` aggiunge lato demone:
+`up` adds the following daemon-side checks:
 
-- capability engine;
-- presenza/forma dell'immagine;
-- compatibilità della command matrix;
-- accesso ai path host;
-- conflitti con altri stack e stato runtime;
-- spazio disponibile e preparazione del rootfs.
+- engine capabilities;
+- image presence and shape;
+- command-matrix compatibility;
+- host-path access;
+- conflicts with other stacks and runtime state;
+- available space and rootfs preparation.
 
-Un validate offline riuscito non garantisce che `up` riesca.
+Successful offline validation does not guarantee that `up` will succeed.
 
-## 13. Evoluzione
+## 13. Evolution
 
-`v1alpha1` può cambiare in modo incompatibile prima della prima release.
-L'implementazione rifiuta versioni sconosciute e campi futuri; non conserva
-silenziosamente dati che non sa applicare.
+`v1alpha1` may change incompatibly before the first release. The
+implementation rejects unknown versions and future fields; it does not
+silently preserve data it does not know how to apply.
 
-Job, build, config/secret, cache, probe, endpoint automatici, lockfile,
-policy, replica, update hook/policy e rollback richiederanno estensioni
-esplicite dello schema dopo che il lifecycle minimo sarà validato.
+Jobs, builds, config/secrets, caches, probes, automatic endpoints, lockfiles,
+policies, replicas, update hooks/policies, and rollback will require explicit
+schema extensions after the minimal lifecycle has been validated.
