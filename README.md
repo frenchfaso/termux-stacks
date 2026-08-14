@@ -30,13 +30,16 @@ behind after the PRoot tracer died, plus 100 consecutive cycles. Its record is
 in [docs/evidence/S3.md](docs/evidence/S3.md). **S4 is complete**: 16 PASS
 checks qualified completed installs and three crashes in each acquisition
 window, freezing a fail-closed ownership policy. Its record is in
-[docs/evidence/S4.md](docs/evidence/S4.md). **S5 is in progress.** The current
-development checkpoint implements strict vertical-profile validation, the
-versioned local protocol, SQLite journaling, and a real one-service
-`up/status/down` path. Native Android smoke tests have exercised normal stop,
-rootfs reuse, exact request replay, graceful daemon shutdown, and fail-closed
-recovery after daemon SIGKILL. S5 is not complete until its full fault,
-storage, upgrade, and stress gates pass and are recorded reproducibly.
+[docs/evidence/S4.md](docs/evidence/S4.md). **S5 is complete on aarch64**: the
+single-service vertical slice now implements strict manifest validation, the
+versioned local protocol, SQLite journaling, and the real
+`up/status/down` lifecycle. Its acceptance run completed with 33 PASS,
+0 FAIL, and 0 SKIP across normal lifecycle, exact request replay, protocol
+mismatch, cooperative and TERM-ignoring process trees, real SQLite-full
+rollback, all six crash checkpoints, and 20 consecutive post-start daemon
+crashes. The current source package and stripped Android release ELF were
+also rebuilt and inspected. The record is in
+[docs/evidence/S5.md](docs/evidence/S5.md). Multi-service work remains open.
 
 Only the essential architectural decisions are frozen:
 

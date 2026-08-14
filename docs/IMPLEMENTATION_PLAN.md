@@ -4,7 +4,7 @@
 **Strategy:** spikes first, vertical slice, then MVP
 **Implementation:** Rust, one package/crate, one binary
 
-**Progress:** S0–S4 completed on 2026-08-14. The scaffold, minimal CLI, daemon
+**Progress:** S0–S5 completed on 2026-08-14. The scaffold, minimal CLI, daemon
 stub, private paths, singleton lock, host CI, aarch64 package, and runit
 integration are green. The v3 device harness completed with 24 PASS, 0 FAIL,
 and 0 SKIP; the stateful runit cycle is PASS. Evidence and limitations are
@@ -19,8 +19,13 @@ records are [evidence/S1.md](evidence/S1.md),
 qualified interrupted-install ownership with 16 PASS, 0 FAIL, and 0 SKIP:
 positive public observations can establish `owned`, while a negative public
 inventory after invocation may have begun is always `ambiguous`. Its record is
-[evidence/S4.md](evidence/S4.md). The package fixture intentionally remains a
-pre-release template: the public tag and GitHub tarball checksum belong to G3.
+[evidence/S4.md](evidence/S4.md). S5 completed the single-service vertical
+slice with 33 PASS, 0 FAIL, and 0 SKIP, including every durable crash boundary,
+20 post-start crash cycles, tree-stop behavior, protocol mismatch, SQLite-full
+rollback, and the current aarch64 package. Its record is
+[evidence/S5.md](evidence/S5.md). The package fixture intentionally remains a
+pre-release template: the public tag, four-architecture build, and GitHub
+tarball checksum belong to G3.
 
 ## 1. Architecture verdict
 
@@ -280,23 +285,17 @@ It left no test alias, process scope, synthetic rootfs, or change to the real
 engine runtime. The complete matrix, artifact hashes, classifier, limitations,
 and raw-bundle checksum are recorded in [evidence/S4.md](evidence/S4.md).
 
-## 10. Phase S5 — Vertical slice
+## 10. Phase S5 — Vertical slice — completed
 
 **Objective:** a useful end-to-end path that is not yet multi-service.
 
-**Status:** in progress. The 2026-08-14 development checkpoint implements the
-strict vertical parser, exact-version JSON Lines protocol, four-table SQLite
-journal, real engine adapter, foreground supervision, logs, conservative cold
-reconciliation, and `config validate/up/status/down`. On Android aarch64 it
-has passed a normal cycle, stopped-rootfs reuse, exact request replay,
-SIGTERM with an active workload, and SIGKILL-to-`unknown` recovery followed
-by separately qualified manual cleanup. These are engineering checks, not the
-final S5 evidence record.
-
-Still open before G1: the reproducible fake-engine and device harness, all
-required fault points, storage-full behavior, protocol upgrade mismatch,
-20-cycle kill/restart acceptance, the selected S3 tree cases under the daemon,
-and final package/ELF evidence.
+**Status:** completed on 2026-08-14. The vertical slice implements the strict
+parser, exact-version JSON Lines protocol, four-table SQLite journal, real
+engine adapter, foreground supervision, separate logs, conservative cold
+reconciliation, and `config validate/up/status/down`. The aarch64 acceptance
+run completed with 33 PASS, 0 FAIL, and 0 SKIP. Host CI, the current native
+Termux package, and the stripped release ELF are green. The reproducible
+record is [evidence/S5.md](evidence/S5.md).
 
 Deliverables:
 
@@ -328,12 +327,18 @@ Required fault points:
 
 Exit criteria:
 
-- a repeatable complete cycle on aarch64;
-- 20 kill/restart cycles without duplicates **or** a safe transition to
-  `unknown` when absence cannot be demonstrated;
-- a consistent database after kill -9 and simulated full storage;
-- logs do not block the child;
-- unimplemented MVP fields fail as `unsupported`.
+- repeatable complete lifecycle, stopped-rootfs reuse, request replay, and
+  active-daemon restart on aarch64;
+- 20 kill/restart cycles transition safely to `unknown`, without duplicates
+  or automatic engine effects;
+- the database remains consistent after SIGKILL and an actual `SQLITE_FULL`
+  failure on the daemon connection;
+- cooperative and TERM-ignoring three-process trees drain through the exact
+  engine session target;
+- logs do not block the child, protocol mismatch fails closed, and
+  unimplemented MVP fields fail as `unsupported`;
+- the exact source commit builds into an inspected aarch64 Termux package with
+  the required dynamic libraries and no debug fault hooks in the release ELF.
 
 ## 11. Phase M1 — Multi-service MVP
 
@@ -381,7 +386,8 @@ contract. A failure narrows the scope or stops the project before the daemon.
 
 ### G1 — Vertical slice
 
-S5 completed on aarch64, with recovery consistent with the public guarantees.
+Completed on 2026-08-14. S5 passed on aarch64 with recovery consistent with
+the public guarantees; see [evidence/S5.md](evidence/S5.md).
 
 ### G2 — MVP
 

@@ -44,3 +44,11 @@ must override the collector with an allowlist containing only the binary,
 license and `termux-stacksd` service files, and the resulting `.deb` must be
 inspected before installation. The canonical off-device builder uses its
 isolated prefix and the default collector.
+
+The same constrained native path was repeated for the S5 checkpoint from an
+immutable source archive. Its temporary recipe added the now-required
+`libsqlite` and `proot-distro (>= 5.6.0)` dependencies; the resulting package
+and stripped release ELF are recorded in
+[`docs/evidence/S5.md`](../../docs/evidence/S5.md). This does not replace the
+four-architecture package gate or materialize the placeholders in
+`build.sh.fixture`.

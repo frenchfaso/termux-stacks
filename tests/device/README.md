@@ -257,3 +257,44 @@ review the two raw public observations. If ownership still cannot be proven,
 retain the synthetic sandbox; a reviewer may later remove that exact private
 sandbox only after independently checking its sentinel and that no recorded
 scope remains. S4 has no SQLite, daemon, workload, or production parser.
+
+## S5 — Single-service vertical slice
+
+S5 runs the real debug daemon, SQLite store, protocol, adapter, foreground
+supervisor, and public `proot-distro 5.6.0` CLI in fresh synthetic prefixes.
+It requires native aarch64 Termux, the exact blessed Alpine OCI archive
+accepted by `fixtures/s5/verify-oci.sh`, and a debug binary built from the
+source under test:
+
+```bash
+cargo build --locked
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/s5.sh \
+  --binary "$PWD/target/debug/termux-stacks" \
+  --archive "$HOME/termux-stacks-s5-alpine-arm64.oci.tar" \
+  --archive-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+The default acceptance run uses 20 post-start crash cycles. A smaller
+`--unknown-cycles 1..20` value is diagnostic only and does not complete S5.
+The matrix covers:
+
+1. normal `up/status/down`, stopped-rootfs reuse, daemon SIGTERM, cold restart,
+   exact request replay, and exact protocol-version rejection;
+2. cooperative and TERM-ignoring root/child/grandchild trees stopped through
+   the exact engine session ID;
+3. a real `SQLITE_FULL` result on the daemon connection, rollback, integrity
+   check, and a lifecycle after restoring capacity;
+4. controlled daemon death before intent, after intent, after install, after
+   start, before commit, and during down;
+5. 20 after-start cold recoveries that must become `unknown` without an
+   automatic engine effect or duplicate workload.
+
+The checkpoints and SQLite page limit are debug-only test interfaces. Release
+binaries omit them and cannot run this harness. Ambiguous process identity,
+database state, containment, or cleanup fails the run and preserves the exact
+private sandbox. The harness never broadens a target, uses an alias as a kill
+target, or mutates the user's real PRoot runtime. Raw bundles remain outside
+the repository; the reviewed acceptance summary is in
+[`docs/evidence/S5.md`](../../docs/evidence/S5.md).

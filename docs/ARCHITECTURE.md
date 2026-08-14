@@ -1,6 +1,6 @@
 # Termux Stacks Architecture
 
-**Status:** v0.1 proposal; S0–S4 completed, S5 vertical slice open
+**Status:** v0.1 proposal; S0–S5 completed, multi-service MVP open
 **Target:** Termux/Android without root access
 **Verified engine baseline:** `proot-distro 5.6.0`
 **Authority:** internal components, persistence, and recovery
@@ -140,31 +140,50 @@ $PREFIX/
 └── var/service/termux-stacksd/
 ```
 
-Conceptually, `state.db` contains:
+The pre-release schema is version 2 and contains:
 
 - `meta`: schema and installation ID;
 - `stacks`: desired state, accepted manifest, committed revision;
-- `services`: engine alias, rootfs generation, state, and last exit;
+- `services`: engine alias, rootfs state, process identity, state, and last exit;
 - `operations`: request ID, intent, phase, and outcome.
 
 These four tables are a starting point, not a public schema. `operations` is
 the journal. There are no separate journal files, snapshots, `current`, event
 stores, or compaction.
 
-Before the first supported format upgrade, the daemon creates only empty
-databases and does not modify an unknown schema: it preserves the file and
-exits with diagnostics. A migration framework will be introduced only when
-there is an actual migration to support.
+The pre-release daemon creates only empty version-2 databases and does not
+modify an unknown schema: it preserves the file and exits with diagnostics.
+There is intentionally no migration from the earlier development schema.
+A migration framework will be introduced only when a released format needs
+one.
 
 Initial durability:
 
 - SQLite transactions and foreign keys enabled;
 - the S5 checkpoint uses the system SQLite library, `journal_mode=DELETE`,
   `synchronous=FULL`, a five-second busy timeout, and no transaction across an
-  engine call; storage and crash faults must pass before this becomes final;
+  engine call; the Android acceptance run qualified transaction rollback and
+  integrity after a real `SQLITE_FULL` result;
 - intent committed before every effect;
 - outcome committed after observing the effect;
 - storage/full errors handled before proceeding.
+
+S5 persists a separate `rootfs_state` and enough operation phases to avoid
+guessing after a cold start:
+
+- `intent` or `logs_prepared`: the engine could not have been invoked, so the
+  service becomes `failed`, the rootfs is `absent`, and an explicit retry uses
+  a new alias;
+- `installed`: install completed before start was invoked, so the service
+  becomes `failed`, the rootfs remains `installed`, and an explicit retry may
+  reuse the same alias;
+- `install_invoked`, `start_invoked`, `started`, `committed`, or `stopping`:
+  an external effect may exist, so loss of the live child handle becomes
+  `unknown` and authorizes no automatic start, stop, retry, or deletion.
+
+The crash and storage hooks used to qualify these boundaries are compiled
+only in debug builds. Release binaries contain neither the checkpoints nor
+their environment-variable names.
 
 ## 8. Engine contract
 
@@ -272,13 +291,14 @@ restart reuses the registered rootfs.
 4. invoke install;
 5. observe success and register the rootfs.
 
-A crash between steps 3 and 5 leaves an incomplete operation. Recovery
-classifies the artifact as `absent | owned | ambiguous`. `Absent` requires
-durable proof that the engine invocation could not have begun; a negative
-engine inventory after invocation is possible is only `ambiguous`. An
-`owned` partial artifact is never started or reused and may be removed only by
-its exact full alias. An `ambiguous` artifact is preserved for diagnosis and
-is not deleted, retried, or started automatically.
+A crash between steps 3 and 5 leaves an incomplete operation. Before the
+durable `install_invoked` phase, recovery can prove `absent` and permits only
+an explicit retry with a new alias. After install returns successfully, the
+durable `installed` phase permits an explicit retry on the same proven rootfs.
+While install may have begun but has not returned, the rootfs is `unknown`.
+A negative engine inventory cannot strengthen that result. An `owned` partial
+artifact is never started or reused and may be removed only by its exact full
+alias; an ambiguous artifact is preserved for diagnosis.
 
 ### Start
 
@@ -315,6 +335,10 @@ The v0.1 strategy is stop-and-recreate when identity is proven, not adoption.
 S2 demonstrated that the session registry can fail without an observable
 signal: automatic restart after a daemon crash remains disabled. The operator
 receives `unknown` and diagnostics; a possible duplicate is not created.
+S5 verified this behavior at every durable boundary and through 20 consecutive
+crashes immediately after workload start. A recovery command that cannot
+reconstruct the lost child handle changes neither the engine session nor the
+rootfs.
 
 ## 12. Update
 
