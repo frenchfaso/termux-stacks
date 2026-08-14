@@ -43,11 +43,12 @@ The v0.1 MVP MUST then support:
 8. fixed, declarative TCP ports on `127.0.0.1`, without NAT;
 9. `no`, `on-failure`, and `always` restart policies, with bounded backoff;
 10. file-based logs and an exit status for each service;
-11. a `running | stopped` desired state;
-12. conservative recovery: restart only when absence or the target is proven;
+11. stop-and-recreate revisions that retain replaced rootfs generations;
+12. a `running | stopped` desired state;
+13. conservative recovery: restart only when absence or the target is proven;
     otherwise, report `unknown` with diagnostics for manual intervention;
-13. runit service installation disabled by default;
-14. explicit errors for unsupported fields or capabilities.
+14. runit service installation disabled by default;
+15. explicit errors for unsupported fields or capabilities.
 
 ## 3. Non-goals
 
@@ -106,14 +107,16 @@ must be separate services.
 
 A `proot-distro` container with a Termux Stacks alias. It is not immutable:
 the guest may write to it. It is reused when restarting the same service and
-replaced when the image changes. Two services never share the same writable
-rootfs.
+replaced when the image changes. A generation is `candidate`, `current`, or
+`retired`. Promotion changes which generation is current; it does not delete
+the retired rootfs. Two services never share the same writable rootfs.
 
 ### Operation
 
 Records at least the stack, type, phase, candidate revision, timestamp, and
-result. The intent is committed before the external effect. There is no
-second authoritative journal outside SQLite.
+result. A stack-wide operation with multiple services records a durable phase
+and outcome for each service. The intent is committed before every external
+effect. There is no second authoritative journal outside SQLite.
 
 ## 5. Invariants
 
@@ -143,17 +146,23 @@ effect.
 
 ### up
 
-`up` validates the manifest, persists a new operation, prepares the rootfs
-instances, stops replaced services, starts the new configuration, and
-finally commits the revision.
+`up` validates the manifest, persists one operation, prepares rootfs
+instances, starts the configuration, and finally commits the revision. A
+changed manifest for a running stack is rejected before any engine effect;
+the operator MUST complete an explicit `down` first. The M1 update profile
+keeps the exact committed service-name set; adding or removing a service from
+an existing stack is deferred and fails before any engine effect.
 
 ```text
-PREPARE -> STOP_OLD -> START_NEW -> COMMIT
+DOWN (explicit command) -> PREPARE -> START_NEW -> COMMIT
 ```
 
-v0.1 allows downtime. If it fails before the commit, the daemon attempts to
-restore the last committed revision. If observation is ambiguous, it marks
-the stack `unknown` and does not proceed automatically.
+Services are prepared and started in a deterministic topological order. A
+partial failure stops services started by the candidate in reverse order only
+while their handles and identities remain owned by the same daemon. The last
+committed generations remain retained but are never restored automatically.
+If any required observation is ambiguous, the stack becomes `unknown` and no
+further engine effect is attempted.
 
 ### down
 
@@ -184,17 +193,25 @@ RESTART_REQUESTED -> STOPPING -> STARTING -> RUNNING
 After a crash, the same conservative rules apply: no new start if the absence
 of the previous session has not been proven.
 
+Graceful daemon shutdown is distinct from `down`. SIGTERM stops accepting new
+mutations, stops owned workloads with the qualified engine target, and records
+their exit without changing `desired=running` to `stopped`. A subsequent
+daemon may restart only services whose absence was durably proven. SIGKILL or
+loss of identity still produces `unknown`.
+
 ## 7. Observed State and Restart
 
-A stack is `stopped`, `starting`, `running`, `failed`, or `unknown`.
+A stack is `stopped`, `starting`, `running`, `restarting`, `failed`, or
+`unknown`.
 A service is `absent`, `starting`, `running`, `stopping`,
-`stopped`, `backoff`, `failed`, or `unknown`.
+`stopped`, `restarting`, `failed`, or `unknown`. A restarting service exposes
+its durable `backoff` effect phase and next-attempt timestamp separately.
 
 Stack state is derived deterministically: `unknown` if a service is
 ambiguous; `stopped` if the desired state is stopped and no session is
 active; `running` if all required services are running; `failed` if a
-required service has exhausted its restart policy; `starting` in all other
-convergence cases.
+required service has exhausted its restart policy; `restarting` if at least
+one service is in durable backoff; `starting` in all other convergence cases.
 
 `absent` means that no rootfs is registered; `stopped` means that the rootfs
 exists and the current daemon observed the exit of the process it owns. A
@@ -205,8 +222,20 @@ registry that is merely empty after a cold start is not sufficient to derive
 is ready. A declared port may be checked for reachability, but v0.1 cannot
 reliably attribute ownership of the listener to a specific PRoot process.
 
-Backoff must have a maximum limit and an anti-crash-loop window. The defaults
-remain implementation details until they have been measured on a device.
+Normal exit is recorded as an integer exit code. Signal termination is
+recorded separately as a signal number; the two values are mutually
+exclusive. With the qualified engine, observing only a signalled foreground
+tracer does not prove that the complete guest tree is absent, so v0.1 records
+that case as `unknown` and does not restart it automatically. `on-failure`
+therefore applies to a proven normal non-zero exit in v0.1; `always` applies to
+proven normal exits. Restart policy never weakens the identity rules.
+
+The initial backoff candidate is 1, 2, 4, 8, then 16 seconds, capped at
+16 seconds, with one initial start and at most five automatic retries in a
+60-second crash-loop window.
+It is a required candidate for device qualification, not yet a measured
+release guarantee. A process that remains running for 60 seconds resets the
+window.
 
 ## 8. Networking and Storage
 
@@ -233,12 +262,62 @@ MVP:
 - `logs STACK SERVICE [--tail N]`;
 - `restart STACK SERVICE`.
 
-`logs` returns no more than 200 lines by default and rejects a response that
-exceeds the protocol limit. v0.1 does not provide follow/streaming.
+`logs` addresses exactly one service and returns stdout and stderr as separate
+streams; it does not synthesize an ordering between them. `--tail` is a strict
+decimal integer from 1 through 200 and defaults to 200. Each stream contains
+at most that many lines. Invalid UTF-8 is represented lossily. A result that
+cannot fit in one bounded protocol response is rejected rather than truncated
+silently. v0.1 does not provide follow/streaming.
+
+```json
+{
+  "stack": "notes",
+  "service": "api",
+  "tail": 200,
+  "stdout": ["first line", "last line"],
+  "stderr": []
+}
+```
 
 Service enablement remains `sv-enable termux-stacksd`; control-plane status
 and logs remain available through the `sv`/runit tools. `status` displays
 stacks and services, so there is no second `ps` command.
+
+For an existing stack, `status STACK` returns one stack object with integer
+`revision` and a `services` array sorted by service name. Every service entry
+contains its name, observed and rootfs states, current alias, optional session
+identity, separate nullable `last_exit_code` and `last_exit_signal`, and the
+two log paths. The v0.1 shape is:
+
+```json
+{
+  "name": "notes",
+  "desired_state": "running",
+  "observed_state": "running",
+  "revision": 2,
+  "services": [
+    {
+      "name": "api",
+      "observed_state": "running",
+      "rootfs_state": "installed",
+      "alias": "txs-a1b2c3-notes-api-deadbeef1234",
+      "session_id": 123,
+      "last_exit_code": null,
+      "last_exit_signal": null,
+      "stdout_log": "/data/data/com.termux/files/usr/var/lib/termux-stacks/logs/notes/api.stdout.log",
+      "stderr_log": "/data/data/com.termux/files/usr/var/lib/termux-stacks/logs/notes/api.stderr.log"
+    }
+  ]
+}
+```
+
+For an unknown stack, the exact minimal shape is:
+
+```json
+{"name":"missing","observed_state":"absent","services":[]}
+```
+
+The absent shape has no desired state or revision because neither exists.
 
 Mutations always pass through the daemon. `config validate` is the only
 command guaranteed to work offline; it does not run capability probes, pull

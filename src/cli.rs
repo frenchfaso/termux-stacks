@@ -1,8 +1,9 @@
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,16 +17,20 @@ Usage:
   termux-stacks up FILE
   termux-stacks status STACK
   termux-stacks down STACK
+  termux-stacks logs STACK SERVICE [--tail N]
+  termux-stacks restart STACK SERVICE
   termux-stacks daemon
 
 Commands:
   config validate FILE  Validate the supported manifest profile locally
   up FILE               Reconcile the stack described by FILE
   status STACK           Show the persisted and observed stack state
-  down STACK             Stop and remove the stack runtime
+  down STACK             Stop the stack; retain rootfs, logs, and volumes
+  logs STACK SERVICE     Show up to 200 lines from the service logs
+  restart STACK SERVICE  Restart a service on its current rootfs
   daemon                 Run the foreground control-plane process
 
-The S5 vertical slice supports one stack with one service.
+The M1 MVP supports multiple stacks and services within Termux's limits.
 ";
 
 #[derive(Debug, Eq, PartialEq)]
@@ -36,6 +41,15 @@ enum Command {
     Up(PathBuf),
     Status(String),
     Down(String),
+    Logs {
+        stack: String,
+        service: String,
+        tail: u16,
+    },
+    Restart {
+        stack: String,
+        service: String,
+    },
     Daemon,
 }
 
@@ -54,9 +68,25 @@ where
         }
         Ok(Command::ConfigValidate(path)) => match crate::manifest::load(&path) {
             Ok((manifest, _source)) => {
+                let manifest_base = match canonical_manifest_base(&path) {
+                    Ok(base) => base,
+                    Err(error) => {
+                        eprintln!("termux-stacks config validate: [io] {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                if let Err(error) =
+                    crate::resources::validate_bind_sources(&manifest_base, &manifest)
+                {
+                    eprintln!("termux-stacks config validate: [invalid_resource] {error}");
+                    return ExitCode::FAILURE;
+                }
+                let services = manifest.services.keys().cloned().collect::<Vec<_>>();
                 println!(
-                    "valid stack {:?}: service {:?}, image {:?}",
-                    manifest.name, manifest.service.name, manifest.service.image
+                    "valid stack {:?}: {} service(s) {:?}",
+                    manifest.name,
+                    services.len(),
+                    services
                 );
                 ExitCode::SUCCESS
             }
@@ -76,12 +106,20 @@ where
                     return ExitCode::FAILURE;
                 }
             };
+            let manifest_base = match canonical_manifest_base(&path) {
+                Ok(base) => base,
+                Err(error) => {
+                    eprintln!("termux-stacks up: [io] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             send_control(
                 "up",
                 crate::protocol::Request::Up {
                     protocol_version: crate::protocol::VERSION,
                     request_id: request_id(),
                     manifest: source,
+                    manifest_base,
                 },
             )
         }
@@ -99,6 +137,29 @@ where
                 stack,
             }
         }),
+        Ok(Command::Logs {
+            stack,
+            service,
+            tail,
+        }) => send_service_request("logs", stack, service, |request_id, stack, service| {
+            crate::protocol::Request::Logs {
+                protocol_version: crate::protocol::VERSION,
+                request_id,
+                stack,
+                service,
+                tail,
+            }
+        }),
+        Ok(Command::Restart { stack, service }) => {
+            send_service_request("restart", stack, service, |request_id, stack, service| {
+                crate::protocol::Request::Restart {
+                    protocol_version: crate::protocol::VERSION,
+                    request_id,
+                    stack,
+                    service,
+                }
+            })
+        }
         Ok(Command::Daemon) => match crate::daemon::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -150,6 +211,15 @@ where
     if first == OsStr::new("down") {
         return one_string_arg(args, "down", Command::Down);
     }
+    if first == OsStr::new("logs") {
+        return parse_logs(args);
+    }
+    if first == OsStr::new("restart") {
+        return parse_service_command(args, "restart", |stack, service| Command::Restart {
+            stack,
+            service,
+        });
+    }
     if first == OsStr::new("daemon") {
         if let Some(second) = args.next() {
             if (second == OsStr::new("-h") || second == OsStr::new("--help"))
@@ -163,6 +233,82 @@ where
     }
 
     Err(format!("unknown command or option {}", quote(&first)))
+}
+
+fn parse_logs<I>(mut args: I) -> Result<Command, String>
+where
+    I: Iterator<Item = OsString>,
+{
+    let stack = next_utf8(&mut args, "missing stack argument for logs")?;
+    let service = next_utf8(&mut args, "missing service argument for logs")?;
+    let Some(option) = args.next() else {
+        return Ok(Command::Logs {
+            stack,
+            service,
+            tail: crate::protocol::DEFAULT_LOG_TAIL,
+        });
+    };
+    if option != OsStr::new("--tail") {
+        return Err(format!("unexpected argument {}", quote(&option)));
+    }
+    let raw_tail = args
+        .next()
+        .ok_or_else(|| "missing value for logs --tail".to_owned())?;
+    let raw_tail = raw_tail
+        .into_string()
+        .map_err(|value| format!("logs --tail must be UTF-8, got {}", quote(&value)))?;
+    let tail = parse_log_tail(&raw_tail)?;
+    no_extra_args(
+        args,
+        Command::Logs {
+            stack,
+            service,
+            tail,
+        },
+    )
+}
+
+fn parse_service_command<I, F>(mut args: I, command_name: &str, build: F) -> Result<Command, String>
+where
+    I: Iterator<Item = OsString>,
+    F: FnOnce(String, String) -> Command,
+{
+    let stack = next_utf8(
+        &mut args,
+        &format!("missing stack argument for {command_name}"),
+    )?;
+    let service = next_utf8(
+        &mut args,
+        &format!("missing service argument for {command_name}"),
+    )?;
+    no_extra_args(args, build(stack, service))
+}
+
+fn next_utf8<I>(args: &mut I, missing: &str) -> Result<String, String>
+where
+    I: Iterator<Item = OsString>,
+{
+    args.next()
+        .ok_or_else(|| missing.to_owned())?
+        .into_string()
+        .map_err(|value| format!("argument must be UTF-8, got {}", quote(&value)))
+}
+
+fn parse_log_tail(value: &str) -> Result<u16, String> {
+    let invalid = || {
+        format!(
+            "logs --tail must be a decimal integer from 1 to {}",
+            crate::protocol::MAX_LOG_TAIL
+        )
+    };
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let tail = value.parse::<u16>().map_err(|_| invalid())?;
+    if tail == 0 || tail > crate::protocol::MAX_LOG_TAIL {
+        return Err(invalid());
+    }
+    Ok(tail)
 }
 
 fn one_path_arg<I, F>(mut args: I, command_name: &str, build: F) -> Result<Command, String>
@@ -199,6 +345,59 @@ where
         return ExitCode::FAILURE;
     }
     send_control(command, build(request_id(), stack))
+}
+
+fn send_service_request<F>(command: &str, stack: String, service: String, build: F) -> ExitCode
+where
+    F: FnOnce(String, String, String) -> crate::protocol::Request,
+{
+    if !validate_cli_name(command, "stack", &stack)
+        || !validate_cli_name(command, "service", &service)
+    {
+        return ExitCode::FAILURE;
+    }
+    send_control(command, build(request_id(), stack, service))
+}
+
+fn validate_cli_name(command: &str, kind: &str, value: &str) -> bool {
+    if let Err(error) = crate::manifest::validate_stack_name(value) {
+        eprintln!(
+            "termux-stacks {command}: [{}] invalid {kind} name {value:?}: names must match ^[a-z][a-z0-9-]{{0,47}}$ and must not start with termux-stacks-",
+            error.kind().code()
+        );
+        false
+    } else {
+        true
+    }
+}
+
+fn canonical_manifest_base(path: &Path) -> Result<String, String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical = fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "cannot resolve manifest directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        format!(
+            "cannot inspect manifest directory {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "manifest base is not a directory: {}",
+            canonical.display()
+        ));
+    }
+    canonical
+        .into_os_string()
+        .into_string()
+        .map_err(|value| format!("manifest directory must be UTF-8, got {}", quote(&value)))
 }
 
 fn send_control(command: &str, request: crate::protocol::Request) -> ExitCode {
@@ -287,8 +486,9 @@ fn quote(value: &OsStr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, parse};
+    use super::{Command, canonical_manifest_base, parse, validate_cli_name};
     use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -331,6 +531,73 @@ mod tests {
             parse(args(&["down", "hello"])),
             Ok(Command::Down("hello".into()))
         );
+        assert_eq!(
+            parse(args(&["restart", "hello", "api"])),
+            Ok(Command::Restart {
+                stack: "hello".into(),
+                service: "api".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_logs_with_a_bounded_decimal_tail() {
+        assert_eq!(
+            parse(args(&["logs", "hello", "api"])),
+            Ok(Command::Logs {
+                stack: "hello".into(),
+                service: "api".into(),
+                tail: 200,
+            })
+        );
+        assert_eq!(
+            parse(args(&["logs", "hello", "api", "--tail", "1"])),
+            Ok(Command::Logs {
+                stack: "hello".into(),
+                service: "api".into(),
+                tail: 1,
+            })
+        );
+        assert_eq!(
+            parse(args(&["logs", "hello", "api", "--tail", "17"])),
+            Ok(Command::Logs {
+                stack: "hello".into(),
+                service: "api".into(),
+                tail: 17,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_log_tail_values() {
+        for value in ["", "0", "+1", "-1", "1.0", "201", "65536"] {
+            let error = parse(args(&["logs", "hello", "api", "--tail", value]))
+                .expect_err("invalid tail must fail");
+            assert!(error.contains("decimal integer from 1 to 200"), "{error:?}");
+        }
+        let missing =
+            parse(args(&["logs", "hello", "api", "--tail"])).expect_err("tail value is required");
+        assert!(missing.contains("missing value"));
+    }
+
+    #[test]
+    fn service_commands_validate_both_names() {
+        assert!(validate_cli_name("logs", "stack", "notes"));
+        assert!(validate_cli_name("logs", "service", "api-1"));
+        assert!(!validate_cli_name("logs", "stack", "Notes"));
+        assert!(!validate_cli_name(
+            "restart",
+            "service",
+            "termux-stacks-internal"
+        ));
+    }
+
+    #[test]
+    fn manifest_base_is_absolute_canonical_and_utf8() {
+        let actual = canonical_manifest_base(Path::new("termux-stacks.yaml"))
+            .expect("canonical manifest base");
+        let expected = std::fs::canonicalize(".").expect("canonical current directory");
+        assert_eq!(PathBuf::from(actual), expected);
     }
 
     #[test]

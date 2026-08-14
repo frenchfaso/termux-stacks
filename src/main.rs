@@ -1,9 +1,11 @@
 mod cli;
 mod daemon;
 mod engine;
+mod logs;
 mod manifest;
 mod paths;
 mod protocol;
+mod resources;
 mod runtime;
 mod store;
 

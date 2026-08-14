@@ -16,3 +16,21 @@ TERMUX_PKG_SERVICE_SCRIPT=(
 termux_step_pre_configure() {
 	termux_setup_rust
 }
+
+termux_step_create_debscripts() {
+	cat <<- EOF > ./prerm
+		#!${TERMUX_PREFIX}/bin/sh
+		if [ "\${1:-}" = remove ]; then
+			if [ -x "${TERMUX_PREFIX}/bin/sv-disable" ]; then
+				SVDIR="${TERMUX_PREFIX}/var/service" \
+					"${TERMUX_PREFIX}/bin/sv-disable" termux-stacksd >/dev/null 2>&1 || :
+			elif [ -x "${TERMUX_PREFIX}/bin/sv" ]; then
+				touch "${TERMUX_PREFIX}/var/service/termux-stacksd/down" 2>/dev/null || :
+				SVDIR="${TERMUX_PREFIX}/var/service" \
+					"${TERMUX_PREFIX}/bin/sv" down termux-stacksd >/dev/null 2>&1 || :
+			fi
+			rm -rf -- "${TERMUX_PREFIX}/var/service/termux-stacksd"
+		fi
+	EOF
+	chmod 0700 ./prerm
+}

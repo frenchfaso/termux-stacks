@@ -1,0 +1,99 @@
+#!/bin/sh
+
+set -eu
+
+mode=${1:?missing worker mode}
+role=${2:-$mode}
+events=${G2_EVENTS_DIR:-/events}
+version=${G2_IMAGE_VERSION:?missing image version}
+
+mkdir -p "$events"
+printf '%s\t%s\t%s\t%s\n' "$role" "$version" "$(date +%s)" "$$" \
+	>>"$events/start.tsv"
+printf 'start role=%s version=%s literal=<%s>\n' \
+	"$role" "$version" "${G2_LITERAL:-}"
+
+record_failure() {
+	printf '%s\t%s\t%s\t%s\n' "$role" "$version" "$(date +%s)" "$$" \
+		>>"$events/failure.tsv"
+}
+
+if [ -n "${G2_BIND_TOKEN:-}" ]; then
+	actual_token=$(cat /input/token)
+	[ "$actual_token" = "$G2_BIND_TOKEN" ] || {
+		printf 'bind mismatch: expected <%s>, got <%s>\n' \
+			"$G2_BIND_TOKEN" "$actual_token" >&2
+		exit 31
+	}
+	printf 'bind=<%s>\n' "$actual_token"
+fi
+
+stop_worker() {
+	printf '%s\n' "$role" >>"$events/stop.order"
+	if [ -n "${server_pid:-}" ]; then
+		kill -TERM "$server_pid" 2>/dev/null || true
+		wait "$server_pid" 2>/dev/null || true
+	fi
+	exit 0
+}
+
+case $mode in
+	steady)
+		case $role in
+			seed)
+				[ -d /state ] || exit 32
+				if [ ! -f /state/value ]; then
+					printf '%s\n' "$version" >/state/value
+				fi
+				volume_value=$(cat /state/value)
+				printf 'volume=<%s>\n' "$volume_value"
+				printf '%s\n' "$version" >"$events/seed.ready"
+				trap stop_worker HUP INT TERM
+				while :; do sleep 1; done
+				;;
+			web)
+				[ -f "$events/seed.ready" ] || {
+					printf '%s\n' 'dependency marker was absent' >&2
+					exit 33
+				}
+				volume_value=$(cat /state/value)
+				mkdir -p /www
+				printf 'role=web version=%s bind=%s volume=%s\n' \
+					"$version" "${G2_BIND_TOKEN:-}" "$volume_value" >/www/index.html
+				printf '%s\n' "$version" >"$events/web.ready"
+				printf 'dependency=<seed> volume=<%s> port=<%s>\n' \
+					"$volume_value" "${G2_PORT:?missing port}"
+				busybox httpd -f -p "127.0.0.1:$G2_PORT" -h /www &
+				server_pid=$!
+				trap stop_worker HUP INT TERM
+				wait "$server_pid"
+				;;
+			*)
+				printf 'unknown steady role: %s\n' "$role" >&2
+				exit 34
+				;;
+		esac
+		;;
+	recover-once)
+		if [ ! -f "$events/failed.once" ]; then
+			: >"$events/failed.once"
+			printf '%s\n' 'planned first failure' >&2
+			sleep 2
+			record_failure
+			exit 17
+		fi
+		printf '%s\n' 'recovered after durable backoff'
+		trap stop_worker HUP INT TERM
+		while :; do sleep 1; done
+		;;
+	fail)
+		printf '%s\n' 'planned capped failure' >&2
+		sleep 2
+		record_failure
+		exit 17
+		;;
+	*)
+		printf 'unknown worker mode: %s\n' "$mode" >&2
+		exit 2
+		;;
+esac

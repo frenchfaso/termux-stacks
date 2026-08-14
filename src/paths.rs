@@ -47,6 +47,19 @@ impl RuntimePaths {
         Ok(())
     }
 
+    pub(crate) fn prepare_volume_directory(
+        &self,
+        stack: &str,
+        volume: &str,
+    ) -> io::Result<PathBuf> {
+        ensure_private_subtree(&self.state_dir, &["volumes", stack, volume])?;
+        Ok(self.volume_path(stack, volume))
+    }
+
+    pub(crate) fn volume_path(&self, stack: &str, volume: &str) -> PathBuf {
+        self.state_dir.join("volumes").join(stack).join(volume)
+    }
+
     pub(crate) fn log_paths(&self, stack: &str, service: &str) -> (PathBuf, PathBuf) {
         (
             self.logs_dir
@@ -233,5 +246,30 @@ mod tests {
 
         fs::remove_dir_all(prefix).expect("remove test prefix");
         fs::remove_dir_all(outside).expect("remove outside prefix");
+    }
+
+    #[test]
+    fn creates_private_persistent_volume_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let prefix = test_prefix("volume");
+        let paths = RuntimePaths::new(prefix.clone());
+        paths.prepare().expect("prepare paths");
+
+        let volume = paths
+            .prepare_volume_directory("hello", "data")
+            .expect("prepare volume");
+        assert_eq!(volume, paths.volume_path("hello", "data"));
+        assert!(volume.is_dir());
+        assert_eq!(
+            fs::metadata(&volume)
+                .expect("volume metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        fs::remove_dir_all(prefix).expect("remove test prefix");
     }
 }

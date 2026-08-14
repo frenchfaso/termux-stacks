@@ -97,6 +97,14 @@ After an upgrade, the already running daemon may be older than the new binary:
 the exact version prevents incompatible CLI and daemon versions from
 continuing silently.
 
+M1 requires protocol version 2. `up` carries the canonical UTF-8 manifest
+base directory so the daemon can resolve and recheck relative binds. `status`
+returns one stack object containing a service array sorted by service name;
+an absent stack returns exactly its name, `observed_state: "absent"`, and an
+empty service array. `logs` and `restart` always identify one stack/service
+pair. Log results contain separate stdout and stderr streams, use a default
+and maximum tail of 200 lines per stream, and must fit in one bounded frame.
+
 ## 6. Daemon and concurrency
 
 At startup, the daemon:
@@ -105,7 +113,8 @@ At startup, the daemon:
 2. prepares paths without following symlinks;
 3. acquires the daemon's non-blocking advisory lock;
 4. recovers any stale socket and binds the socket, without accepting requests;
-5. opens SQLite and accepts only the exact schema version;
+5. opens SQLite, transactionally migrates an explicitly supported previous
+   version, and otherwise requires the exact schema version;
 6. performs the engine capability probe;
 7. reconciles incomplete operations;
 8. accepts requests.
@@ -120,9 +129,12 @@ collection may use a limited number of threads, but every state change returns
 to the queue. SQLite is never left in a transaction during install, run, kill,
 or lengthy I/O.
 
-The daemon receives SIGTERM from runit, stops accepting mutations, records the
-shutdown, and terminates workloads according to policy. A kill -9 is handled
-only on restart.
+The daemon receives SIGTERM from runit, stops accepting mutations, and stops
+each owned workload in reverse dependency order. This graceful control-plane
+shutdown records proven exits but preserves each stack's desired state; it is
+not implemented by calling the user-facing `down`. A later daemon may restart
+only services whose stopped state was durably proven. A kill -9 is handled
+only on restart and leaves any service that may still be active `unknown`.
 
 ## 7. Persistence
 
@@ -140,22 +152,46 @@ $PREFIX/
 └── var/service/termux-stacksd/
 ```
 
-The pre-release schema is version 2 and contains:
+The completed S5 checkpoint uses pre-release schema version 2 with four
+tables:
 
 - `meta`: schema and installation ID;
-- `stacks`: desired state, accepted manifest, committed revision;
+- `stacks`: desired state, stored manifest, and the S5 revision token;
 - `services`: engine alias, rootfs state, process identity, state, and last exit;
 - `operations`: request ID, intent, phase, and outcome.
 
-These four tables are a starting point, not a public schema. `operations` is
-the journal. There are no separate journal files, snapshots, `current`, event
-stores, or compaction.
+M1 requires schema version 3:
 
-The pre-release daemon creates only empty version-2 databases and does not
-modify an unknown schema: it preserves the file and exits with diagnostics.
-There is intentionally no migration from the earlier development schema.
-A migration framework will be introduced only when a released format needs
-one.
+- `meta`: schema and installation ID;
+- `stacks`: desired/observed state, committed manifest and manifest base, and
+  an integer committed revision;
+- `services`: logical service state, serialized effective configuration,
+  current-generation reference, and persisted restart window;
+- `rootfs_generations`: non-reusable alias, owner, image, role
+  (`candidate | current | retired`), rootfs state, process/session identity,
+  separate exit code/signal, and log paths;
+- `operations`: stack-wide request, candidate revision/configuration, phase,
+  response, and outcome;
+- `operation_services`: deterministic ordinal and durable phase/outcome for
+  every service affected by an operation.
+
+`operations` and `operation_services` are the journal. Environment,
+dependencies, mounts, volumes, and ports do not require separate tables:
+their validated effective configuration remains in the committed or candidate
+manifest. Volume paths are deterministic, and global port conflicts can be
+checked by scanning committed manifests while the single mutation queue is
+held. There are no separate journal files, snapshots, event stores, or
+compaction.
+
+The version-2 to version-3 migration is one SQLite transaction. It preserves
+the installation ID, stack/service configuration, exact alias, logs, and a
+proven stopped/installed generation. A stack with a successful version-2 `up`
+becomes committed revision 1; a stack without a successful `up` has revision
+0 and no committed manifest. Because the new daemon cannot inherit an old
+live child handle, any version-2 active, effect-invoked, or incomplete state
+migrates to `unknown` without an engine call. `user_version` changes only in
+the committing transaction. An unknown schema is never modified: the database
+is preserved and startup fails with diagnostics.
 
 Initial durability:
 
@@ -184,6 +220,13 @@ guessing after a cold start:
 The crash and storage hooks used to qualify these boundaries are compiled
 only in debug builds. Release binaries contain neither the checkpoints nor
 their environment-variable names.
+
+M1 applies the same phase boundary independently to every
+`operation_services` row. A service that has not reached an engine invocation
+can be classified from durable ordering; `install_invoked`, `start_invoked`,
+`started`, or `stopping` becomes `unknown` when the live handle is lost. The
+stack is `unknown` if any required service is ambiguous, and reconciliation
+does not continue the remaining DAG.
 
 ## 8. Engine contract
 
@@ -300,6 +343,11 @@ A negative engine inventory cannot strengthen that result. An `owned` partial
 artifact is never started or reused and may be removed only by its exact full
 alias; an ambiguous artifact is preserved for diagnosis.
 
+For multiple services, the validated dependency graph yields one stable
+topological order, using service-name order to break otherwise independent
+choices. Preparation and startup use that order; stop uses its exact reverse.
+Every service has its own non-reusable alias and operation phase.
+
 ### Start
 
 1. record `START_NEW`;
@@ -312,6 +360,11 @@ alias; an ambiguous artifact is preserved for diagnosis.
 
 Application readiness is outside v0.1.
 
+Normal process completion stores `last_exit_code`; signal termination stores
+`last_exit_signal`. They are nullable and mutually exclusive. A successful
+candidate is committed by promoting its generation references and integer
+revision in one SQLite transaction.
+
 ### Stop
 
 The adapter attempts the engine path verified by the spike and waits for its
@@ -319,22 +372,54 @@ escalation. If it cannot prove identity, it marks the service `unknown` and
 does not send signals to potentially recycled host PIDs. The user receives a
 diagnosis and a manual procedure.
 
+### Restart and supervision
+
+The synchronous daemon performs a bounded supervision tick between control
+socket iterations. It reaps owned children, records a proven exit before any
+new start, derives stack state, and starts only attempts whose durable backoff
+deadline has elapsed. A long serialized engine operation may delay a tick, so
+backoff values are minimum delays rather than scheduling deadlines.
+
+The initial device-qualification candidate is exponential delay at 1, 2, 4,
+8, then 16 seconds, capped at 16 seconds, with one initial start and at most
+five automatic retries in a 60-second window. It is not a release guarantee until measured on
+Android. A process that remains running for 60 seconds resets the window.
+`no`, `on-failure`, and `always` never authorize a start when prior absence is
+ambiguous. Every automatic or manual restart persists its own intent before
+stop and start effects.
+
+### Logs
+
+Each generation writes stdout and stderr to separate private files. Log
+retrieval reads backwards with both line and byte bounds; it does not load an
+unbounded file or merge the two streams. The default and maximum tail is 200
+lines per stream. Before writing a response, the daemon verifies that the
+complete JSON frame fits the protocol limit and returns a bounded error if it
+does not.
+
 ## 11. Reconciliation
 
 At startup:
 
 1. read the committed revision, desired state, and incomplete operations;
-2. query the available child/session evidence;
-3. classify the session as `absent | active | ambiguous`;
-4. for `desired=stopped`, stop only targets with sufficient ownership;
-5. for `desired=running`, restart only after ruling out a duplicate;
-6. if ambiguous, use `unknown` with operational diagnostics;
-7. do not remove rootfs instances automatically.
+2. query the available child/session evidence for each service;
+3. classify each session as `absent | active | ambiguous`;
+4. classify every incomplete per-service phase in deterministic DAG order;
+5. for `desired=stopped`, stop only targets with sufficient ownership;
+6. for `desired=running`, restart only after proving prior absence;
+7. derive the stack state, with any required ambiguous service making it
+   `unknown`;
+8. do not continue a partially completed DAG after ambiguity;
+9. do not remove rootfs instances automatically.
 
 The v0.1 strategy is stop-and-recreate when identity is proven, not adoption.
 S2 demonstrated that the session registry can fail without an observable
-signal: automatic restart after a daemon crash remains disabled. The operator
-receives `unknown` and diagnostics; a possible duplicate is not created.
+signal: automatic restart after ungraceful loss of an active child handle
+remains disabled. A proven normal exit or completed graceful shutdown is a
+separate proof of absence and may permit policy-driven restart. A signal on
+the foreground tracer alone does not prove guest-tree absence. Otherwise the
+operator receives `unknown` and diagnostics; a possible duplicate is not
+created.
 S5 verified this behavior at every durable boundary and through 20 consecutive
 crashes immediately after workload start. A recovery command that cannot
 reconstruct the lost child handle changes neither the engine session nor the
@@ -342,16 +427,29 @@ rootfs.
 
 ## 12. Update
 
-`up` with a changed manifest uses:
+v0.1 deliberately separates stopping from replacement. `up` with a changed
+manifest is accepted only after an explicit successful `down`; while the
+committed graph is running it fails before any engine effect. The replacement
+then creates an integer candidate revision and uses the exact existing
+service-name set; adding or removing logical services is deferred. It uses:
 
 ```text
-PREPARE -> STOP_OLD -> START_NEW -> COMMIT
+DOWN (explicit command) -> PREPARE -> START_NEW -> COMMIT
 ```
 
-This is not an atomic transaction. Downtime is allowed. If START_NEW fails,
-the daemon attempts to restart the last committed revision on its still
-present rootfs. v0.1 has no public rollback, data migration, or automatic GC;
-retired rootfs instances remain for manual cleanup.
+M1 preparation creates a fresh candidate generation for every service. The
+candidate starts in stable topological order. Commit atomically promotes
+candidates to `current`, marks replaced generations `retired`, stores the
+candidate manifest/base, and advances the revision. No rootfs is deleted, and
+named volume directories are independent of rootfs generations.
+
+This is not an atomic runtime transition, and downtime is required. If
+START_NEW fails while the same daemon still owns all required evidence, it
+stops candidate services in reverse order. The last committed generations
+remain retained but are not started automatically; retrying the last manifest
+is an explicit operator action after diagnosis. Loss of any required identity
+produces `unknown`; retired and ambiguous generations remain for manual
+diagnosis. v0.1 has no public rollback command and no automatic GC.
 
 ## 13. Networking and mounts
 

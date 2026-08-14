@@ -298,3 +298,168 @@ private sandbox. The harness never broadens a target, uses an alias as a kill
 target, or mutates the user's real PRoot runtime. Raw bundles remain outside
 the repository; the reviewed acceptance summary is in
 [`docs/evidence/S5.md`](../../docs/evidence/S5.md).
+
+## G2 — Multi-service MVP
+
+G2 is the Android acceptance harness for M1. It uses the real debug daemon,
+v3 SQLite store, public `proot-distro 5.6.0` adapter, and two reviewed arm64
+OCI fixtures. It never uses the device's real engine state for a workload:
+every case has a fresh synthetic `TERMUX__PREFIX` and `TERMUX__HOME` below a
+private `mktemp` directory. The harness derives the canonical Termux `files`
+tree from `$PREFIX` and rejects an output root or `$TMPDIR` outside that
+application-private tree.
+
+### Device prerequisites
+
+- native aarch64 Termux;
+- Bash, Python, Git, `jq`, `proot-distro 5.6.0`, `proot`, and the standard
+  coreutils (`sha256sum`, `sync`, `sort`, `cmp`, `find`, `stat`);
+- a clean Git checkout and a debug `termux-stacks` binary built from that
+  source; a dirty or untracked source tree is rejected;
+- the reviewed revision-2 v1 and v2 arm64 OCI archives and their archive
+  SHA-256 values;
+- enough free app-private storage for several disposable Alpine rootfs
+  generations. No package installation is performed by the harness.
+
+The output root and `$TMPDIR` must be real directories under the same canonical
+Termux application-private `files` tree. Shared storage is rejected even when
+it appears writable. The fault checkpoints are compiled only in debug builds.
+The restart-cap test uses one initial start and at most five retries with the
+production candidate delays of 1, 2, 4, 8, and 16 seconds, so a complete run
+takes longer than an ordinary smoke test.
+
+### Building the external fixtures
+
+The fixture is generic and has no application-specific dependency. Its Alpine
+base is pinned by digest in
+`fixtures/g2/Containerfile`. Build each version off-device from the same
+reviewed worker, without network access after the base is present:
+
+```bash
+for version in v1 v2; do
+  podman build \
+    --platform linux/arm64 \
+    --format oci \
+    --pull=never \
+    --network=none \
+    --no-cache \
+    --layers=false \
+    --timestamp 0 \
+    --build-arg "G2_FIXTURE_VERSION=$version" \
+    --tag "localhost/termux-stacks-g2-fixture:$version" \
+    --file tests/device/fixtures/g2/Containerfile \
+    tests/device/fixtures/g2
+  podman save --format oci-archive \
+    --output "termux-stacks-g2-fixture-$version-linux-arm64.oci.tar" \
+    "localhost/termux-stacks-g2-fixture:$version"
+  sha256sum "termux-stacks-g2-fixture-$version-linux-arm64.oci.tar"
+  tar -xOf "termux-stacks-g2-fixture-$version-linux-arm64.oci.tar" index.json \
+    | jq -r '.manifests[0].digest'
+done
+```
+
+Revision 2 adds the failure-timestamp protocol used by the restart timing
+oracle. That changes the worker bytes and invalidates both previous manifests:
+
+```text
+v1 superseded: sha256:be6828cb0c20d3f37b6161f11818e1fd2542e0fa403f35a4af3cc513f64097ac
+v2 superseded: sha256:284bf5b40b1a54e9940f496170598f8d5b26a5f2d232cd43b68b5d4f87a8da9e
+```
+
+Those values are historical evidence only and must never authorize a
+revision-2 run. The two revision-2 manifest digests are reviewed and frozen
+together as `BLESSED_MANIFEST_*_SHA256` values in `verify-oci.sh`. Whenever
+the worker, Containerfile, or build contract changes, rebuild and review both
+fixtures, replace both trust roots in the same commit, and leave the source
+tree clean. Do not replace only one root and do not pass a manifest digest on
+the harness command line.
+
+The reviewed manifest digests are repository-owned acceptance trust roots. The
+two archive hashes qualify the exact transferred tar serializations and remain
+explicit harness inputs. `verify-oci.sh` verifies the frozen manifest for the
+selected version, every referenced compressed blob, the `linux/arm64` config,
+both decompressed layer diff IDs, the pinned base diff ID, fixture revision,
+Entrypoint, version marker, and archived worker bytes against the repository
+fixture. The reviewed revision-2 archive and manifest values are recorded in
+`docs/evidence/G2.md`.
+The archives and raw evidence remain outside Git.
+
+### Acceptance command
+
+```bash
+cargo build --locked
+mkdir -p "$HOME/termux-stacks-evidence"
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+bash tests/device/g2.sh \
+  --binary "$PWD/target/debug/termux-stacks" \
+  --archive-v1 "$HOME/termux-stacks-g2-fixture-v1-linux-arm64.oci.tar" \
+  --archive-v1-sha256 V1_ARCHIVE_SHA256 \
+  --archive-v2 "$HOME/termux-stacks-g2-fixture-v2-linux-arm64.oci.tar" \
+  --archive-v2-sha256 V2_ARCHIVE_SHA256 \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+Replace both archive hash placeholders with exactly 64 lowercase hexadecimal
+characters. Keep the checkout, archives, and evidence directory separate so
+creating evidence cannot make the source tree dirty. A standard Termux shell
+already sets app-private `$HOME` and `$TMPDIR`; the harness verifies both.
+
+### Acceptance matrix
+
+The normal lifecycle proves:
+
+1. two simultaneous stacks, each with a stable `seed -> web` dependency and
+   two independently owned foreground sessions;
+2. literal environment values, manifest-relative binds, one private named
+   volume per stack, reachable fixed loopback ports, and pre-effect rejection
+   of a duplicate port declaration;
+3. bounded two-stream logs and a per-service restart on each stack; each
+   restart replaces only the selected web session, preserves its alias and
+   rootfs generation, and leaves the peer service and peer stack identities
+   byte-for-byte unchanged;
+4. explicit `down`, then v1-to-v2 `up`, with new aliases, retained retired
+   rootfs generations, unchanged volume data, and the second stack unaffected;
+5. exact reverse-DAG stop order and an empty synthetic session registry.
+
+The restart case executes one initial start and at most five retries. The
+worker records a timestamp immediately before every planned normal failure.
+The harness captures all five durable `next_restart_at` values and requires
+both each failure-to-deadline interval and each failure-to-next-start interval
+to meet the 1/2/4/8/16-second minimum. After the fifth retry fails, no further
+start is permitted.
+
+The controlled crash matrix covers:
+
+- death between the first and second service starts: the first service becomes
+  `unknown`, the untouched dependent remains `failed/absent`, and no effect is
+  retried;
+- death after both service starts succeed but before the parent `up` commits:
+  parent-only cold recovery terminalizes the ambiguous parent, retains both
+  successful child journals, marks both active services `unknown`, and creates
+  no duplicate operation or engine effect;
+- death after durable down intent but before the first engine kill: both
+  sessions remain unchanged and recovery does not infer or repeat the stop;
+- death after a failed process is proven absent and its retry is durably in
+  backoff: cold recovery performs exactly the one authorized retry.
+
+The first three ambiguous cases are cleaned only with the exact session IDs
+captured before daemon death. A failed identity check, failed registry read,
+unexpected session, or incomplete drain preserves the entire private runtime
+and reports its path. Cleanup never uses an alias as a kill target, `--all`,
+`reset`, `clear-cache`, a glob, or a pre-existing target. The real container
+inventory is observed before and after and must remain byte-for-byte unchanged.
+
+### Evidence and failure diagnostics
+
+Preflight records the clean source commit, binary hash, `Cargo.toml` and
+`Cargo.lock` hashes, harness/shared-library hashes, all fixture-source hashes,
+archive/manifest identities, platform versions, and the app-private roots.
+`SHA256SUMS` covers every resulting evidence file.
+
+Before cleanup after any case failure, and again after any cleanup ambiguity,
+the harness captures the exact synthetic engine inventory, recorded daemon
+identity, database integrity/current operations, service logs, and a `/proc`
+process tree seeded from the daemon, engine sessions, and persisted child
+identities. Command arguments are allowlist-redacted: paths, values, and
+unknown executable names are never written verbatim. An evidence capture is
+read-only and never expands the set of processes eligible for signaling.

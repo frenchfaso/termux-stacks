@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -11,6 +11,19 @@ const SUPPORTED_VERSION: &str = "5.6.0";
 pub(crate) struct Engine {
     binary: PathBuf,
     architecture: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Bind {
+    pub(crate) source: PathBuf,
+    pub(crate) target: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RunOptions<'a> {
+    pub(crate) command: Option<&'a [String]>,
+    pub(crate) environment: &'a BTreeMap<String, String>,
+    pub(crate) binds: &'a [Bind],
 }
 
 #[derive(Debug)]
@@ -27,6 +40,7 @@ pub(crate) enum Error {
     },
     Capability(String),
     InvalidSessionOutput(String),
+    InvalidArgument(String),
 }
 
 impl fmt::Display for Error {
@@ -51,6 +65,7 @@ impl fmt::Display for Error {
             Self::InvalidSessionOutput(line) => {
                 write!(formatter, "invalid proot-distro ps --quiet line {line:?}")
             }
+            Self::InvalidArgument(message) => formatter.write_str(message),
         }
     }
 }
@@ -128,13 +143,34 @@ impl Engine {
     pub(crate) fn run(
         &self,
         alias: &str,
-        command: Option<&[String]>,
+        options: RunOptions<'_>,
         stdout: File,
         stderr: File,
     ) -> Result<Child, Error> {
         let mut process = self.command();
-        process.args(["run", "--isolated", alias]);
-        if let Some(command) = command {
+        process.args(["run", "--isolated"]);
+        for (key, value) in options.environment {
+            process.arg("--env").arg(format!("{key}={value}"));
+        }
+        for binding in options.binds {
+            let source = binding.source.to_str().ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "bind source is not UTF-8: {}",
+                    binding.source.display()
+                ))
+            })?;
+            if source.contains(':') {
+                return Err(Error::InvalidArgument(format!(
+                    "bind source contains unsupported ':' character: {}",
+                    binding.source.display()
+                )));
+            }
+            process
+                .arg("--bind")
+                .arg(format!("{source}:{}", binding.target));
+        }
+        process.arg(alias);
+        if let Some(command) = options.command {
             process.arg("--").args(command);
         }
         process
@@ -248,7 +284,8 @@ pub(crate) fn boot_id() -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, bounded_text, parse_session_output};
+    use super::{Bind, Engine, RunOptions, bounded_text, parse_session_output};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -296,5 +333,60 @@ mod tests {
         for invalid in [b" 123\n".as_slice(), b"0\n", b"123\n123\n", b"pid=123\n"] {
             assert!(parse_session_output(invalid).is_err(), "{invalid:?}");
         }
+    }
+
+    #[test]
+    fn run_builds_literal_environment_bind_and_command_arguments() {
+        let prefix = crate::paths::test_prefix("engine-run-args");
+        let binary = prefix.join("proot-distro");
+        let arguments = prefix.join("proot-distro.args");
+        let shell = std::env::var_os("PREFIX")
+            .map(|prefix| std::path::PathBuf::from(prefix).join("bin/sh"))
+            .unwrap_or_else(|| "/bin/sh".into());
+        fs::write(
+            &binary,
+            format!(
+                "#!{}\n: >\"$0.args\"\nfor arg do printf '%s\\n' \"$arg\" >>\"$0.args\"; done\n",
+                shell.display()
+            ),
+        )
+        .expect("write fake engine");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("make fake executable");
+        let stdout = fs::File::create(prefix.join("stdout")).expect("stdout");
+        let stderr = fs::File::create(prefix.join("stderr")).expect("stderr");
+        let environment = BTreeMap::from([
+            ("ALPHA".to_owned(), "space and $literal".to_owned()),
+            ("EMPTY".to_owned(), String::new()),
+        ]);
+        let binds = [Bind {
+            source: prefix.join("data"),
+            target: "/data".into(),
+        }];
+        fs::create_dir(&binds[0].source).expect("bind source");
+        let command = ["/probe".to_owned(), "two words".to_owned()];
+
+        let mut child = Engine::with_binary(binary)
+            .run(
+                "txs-alias",
+                RunOptions {
+                    command: Some(&command),
+                    environment: &environment,
+                    binds: &binds,
+                },
+                stdout,
+                stderr,
+            )
+            .expect("run fake engine");
+        assert!(child.wait().expect("wait").success());
+
+        assert_eq!(
+            fs::read_to_string(arguments).expect("read arguments"),
+            format!(
+                "run\n--isolated\n--env\nALPHA=space and $literal\n--env\nEMPTY=\n--bind\n{}:/data\ntxs-alias\n--\n/probe\ntwo words\n",
+                binds[0].source.display()
+            )
+        );
+        fs::remove_dir_all(prefix).expect("remove test prefix");
     }
 }

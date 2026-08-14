@@ -119,6 +119,13 @@ Each service accepts:
 A service represents a foreground process. If the application daemonizes and
 the main process exits, the service has terminated.
 
+A changed manifest, after an explicit `down`, creates a fresh non-reusable
+rootfs generation for every service in the M1 implementation. Restarting a
+service without changing the manifest reuses its current generation.
+Promotion retains replaced generations for diagnosis; the manifest has no
+removal or garbage-collection switch. Updating an existing stack in M1 must
+preserve its exact service-name set; adding or removing services is deferred.
+
 ## 6. Image and Command
 
 `image` identifies either an image from an OCI registry or a local OCI image
@@ -219,7 +226,13 @@ Rules:
 - there is no `readOnly` flag: PRoot does not guarantee it.
 
 A declared volume is a private directory managed by Termux Stacks. The v0.1
-manifest does not expose drivers, quotas, backup, or lifecycle policies.
+manifest does not expose drivers, quotas, backup, or lifecycle policies. Its
+directory survives process restart, `down`, and promotion of a new rootfs
+generation for the service.
+
+The CLI sends the canonical UTF-8 manifest base to the daemon. The daemon
+resolves and rechecks every bind source before the engine invocation; stored
+raw YAML alone is not used as a path base.
 
 ## 9. Ports
 
@@ -240,25 +253,39 @@ deferred.
 
 ## 10. Dependencies
 
-`dependsOn` is an array of services. The graph must be acyclic. Starting a
-dependent service waits until the predecessor process is observed alive; this
-does not imply application readiness. Stop uses the reverse order.
+`dependsOn` is an array of distinct service names. Self-dependencies, missing
+references, duplicates, and cycles are invalid. The graph has one stable
+topological order: service-name order breaks ties between independent nodes.
+Starting a dependent service waits until the predecessor process is observed
+alive; this does not imply application readiness. Stop uses the exact reverse
+of the stable start order.
 
 If the predecessor fails before a dependent service starts, that service is
-not started and the stack becomes `failed`. After the dependent service has
-started, an exit of the predecessor does not stop it automatically; the
-predecessor's restart policy operates independently.
+not started and the stack becomes `failed`. Services already started by the
+same candidate are stopped in reverse order only while the daemon still owns
+their identities. If a partial operation loses any required identity, the
+stack becomes `unknown` and the remaining graph is not continued. After the
+dependent service has started, an exit of the predecessor does not stop it
+automatically; the predecessor's restart policy operates independently.
 
 ## 11. Restart
 
 Allowed values:
 
 - `no`: no automatic restart;
-- `on-failure`: restart only after a non-zero exit or a signal;
-- `always`: restart while the desired state is `running`.
+- `on-failure`: restart after a proven normal non-zero exit;
+- `always`: restart after a proven normal exit while desired state is
+  `running`.
 
-Backoff, window, and limit initially use internal defaults measured on-device.
-They are not yet configurable in the manifest.
+No restart policy authorizes a start until absence of the previous process is
+proven. A signal observed on the foreground tracer does not prove that the
+whole guest tree is absent and therefore produces `unknown`, without an
+automatic restart, in v0.1. The initial device-qualification candidate uses
+delays of 1, 2, 4, 8, then 16 seconds, capped at 16 seconds, with one initial
+start and at most five automatic retries in a 60-second window. A process
+running continuously for 60 seconds resets the
+window. These values are not configurable and are not a release guarantee
+until the Android suite qualifies them.
 
 ## 12. Validation
 

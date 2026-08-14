@@ -153,9 +153,12 @@ ELF. The CLI and daemon include an exact protocol version:
 - incompatible: fail fast with `sv restart termux-stacksd`;
 - no automatic restart from post-install.
 
-Before the first supported format upgrade, the daemon creates an empty DB,
-accepts only the exact version, and preserves an unknown schema unchanged.
-Backups/migrations enter with the first real transition.
+The first supported format transition is the transactional schema-2 to
+schema-3 migration introduced by M1. It performs no engine effect, preserves
+an unknown future schema unchanged, and maps any inherited active or
+incomplete state to `unknown`. The package upgrade matrix must exercise this
+migration with both disabled and running daemon scenarios; package maintainer
+scripts do not run it.
 
 Removal is distinct from upgrade. A future `prerm` must, only during actual
 removal:

@@ -3,16 +3,19 @@ use serde_json::Value;
 use std::fmt;
 use std::io::{self, BufRead, Write};
 
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub(crate) const DEFAULT_LOG_TAIL: u16 = 200;
+pub(crate) const MAX_LOG_TAIL: u16 = 200;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
     Up {
         protocol_version: u32,
         request_id: String,
         manifest: String,
+        manifest_base: String,
     },
     Status {
         protocol_version: u32,
@@ -23,6 +26,19 @@ pub(crate) enum Request {
         protocol_version: u32,
         request_id: String,
         stack: String,
+    },
+    Logs {
+        protocol_version: u32,
+        request_id: String,
+        stack: String,
+        service: String,
+        tail: u16,
+    },
+    Restart {
+        protocol_version: u32,
+        request_id: String,
+        stack: String,
+        service: String,
     },
 }
 
@@ -37,6 +53,12 @@ impl Request {
             }
             | Self::Down {
                 protocol_version, ..
+            }
+            | Self::Logs {
+                protocol_version, ..
+            }
+            | Self::Restart {
+                protocol_version, ..
             } => *protocol_version,
         }
     }
@@ -45,7 +67,9 @@ impl Request {
         match self {
             Self::Up { request_id, .. }
             | Self::Status { request_id, .. }
-            | Self::Down { request_id, .. } => request_id,
+            | Self::Down { request_id, .. }
+            | Self::Logs { request_id, .. }
+            | Self::Restart { request_id, .. } => request_id,
         }
     }
 
@@ -61,6 +85,9 @@ impl Request {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         {
             return Err(ProtocolError::InvalidRequestId);
+        }
+        if matches!(self, Self::Logs { tail, .. } if *tail == 0 || *tail > MAX_LOG_TAIL) {
+            return Err(ProtocolError::InvalidLogTail);
         }
         Ok(())
     }
@@ -135,6 +162,7 @@ pub(crate) enum ProtocolError {
     InvalidJson(serde_json::Error),
     Version(u32),
     InvalidRequestId,
+    InvalidLogTail,
     MismatchedRequestId,
     InvalidResponse,
 }
@@ -154,6 +182,10 @@ impl fmt::Display for ProtocolError {
                 "unsupported protocol version {version}; expected {VERSION}"
             ),
             Self::InvalidRequestId => formatter.write_str("invalid request_id"),
+            Self::InvalidLogTail => write!(
+                formatter,
+                "logs tail must be between 1 and {MAX_LOG_TAIL} lines"
+            ),
             Self::MismatchedRequestId => formatter.write_str("response request_id does not match"),
             Self::InvalidResponse => formatter.write_str("invalid response envelope"),
         }
@@ -238,6 +270,58 @@ mod tests {
     }
 
     #[test]
+    fn m1_requests_round_trip_without_losing_fields() {
+        let up = Request::Up {
+            protocol_version: VERSION,
+            request_id: "up-1".into(),
+            manifest: "kind: Stack\n".into(),
+            manifest_base: "/data/data/com.termux/files/home/project".into(),
+        };
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &up).expect("write up frame");
+        let decoded = read_request(&mut Cursor::new(bytes))
+            .expect("read up frame")
+            .expect("up request");
+        match decoded {
+            Request::Up {
+                manifest,
+                manifest_base,
+                ..
+            } => {
+                assert_eq!(manifest, "kind: Stack\n");
+                assert_eq!(manifest_base, "/data/data/com.termux/files/home/project");
+            }
+            other => panic!("expected up request, got {other:?}"),
+        }
+
+        let logs = Request::Logs {
+            protocol_version: VERSION,
+            request_id: "logs-1".into(),
+            stack: "notes".into(),
+            service: "api".into(),
+            tail: 200,
+        };
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &logs).expect("write logs frame");
+        let decoded = read_request(&mut Cursor::new(bytes))
+            .expect("read logs frame")
+            .expect("logs request");
+        match decoded {
+            Request::Logs {
+                stack,
+                service,
+                tail,
+                ..
+            } => {
+                assert_eq!(stack, "notes");
+                assert_eq!(service, "api");
+                assert_eq!(tail, 200);
+            }
+            other => panic!("expected logs request, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn response_requires_one_result_shape() {
         let response = Response::success("one", json!({"state": "absent"}));
         response.validate("one").expect("valid response");
@@ -259,5 +343,22 @@ mod tests {
         let bytes = br#"{"command":"status","protocol_version":1,"request_id":"one","stack":"hello","extra":true}
 "#;
         assert!(read_request(&mut Cursor::new(bytes)).is_err());
+    }
+
+    #[test]
+    fn rejects_a_log_tail_outside_the_protocol_range() {
+        for tail in [0, super::MAX_LOG_TAIL + 1] {
+            let request = Request::Logs {
+                protocol_version: VERSION,
+                request_id: "logs-1".into(),
+                stack: "notes".into(),
+                service: "api".into(),
+                tail,
+            };
+            assert!(matches!(
+                request.validate_envelope(),
+                Err(ProtocolError::InvalidLogTail)
+            ));
+        }
     }
 }

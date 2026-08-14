@@ -63,6 +63,7 @@ The subsequent MVP adds:
 - non-sensitive environment variables;
 - volumes and binds;
 - fixed loopback ports;
+- stop-and-recreate revisions with retained rootfs generations;
 - restart and log retrieval.
 
 Everything else is deferred. The normative feature matrix is in
@@ -347,12 +348,41 @@ It starts only after S0–S5.
 Incremental vertical slices, each complete with tests and recovery:
 
 1. multiple stacks and namespaces;
-2. multiple services and DAG ordering;
-3. literal environment variables;
-4. named volumes and binds;
-5. fixed loopback ports;
-6. restart/backoff;
-7. `logs --tail` and `restart`.
+2. multiple services, a deterministic `dependsOn` DAG, per-service operation
+   phases, rootfs generations, schema 2-to-3 migration, and multi-service
+   status;
+3. update/revision: require an explicit completed `down`, prepare candidate
+   generations, start the candidate, commit only after complete success,
+   retain retired generations, preserve the exact logical service-name set,
+   and qualify conservative partial-failure recovery;
+4. literal environment variables;
+5. named volumes and binds, including canonical manifest-base handling;
+6. fixed loopback ports;
+7. restart/backoff and graceful daemon shutdown that preserves desired state;
+8. bounded two-stream `logs --tail` and per-service `restart`.
+
+The M1 persistence cut introduces integer committed/candidate revisions,
+logical services, separately owned rootfs generations, and per-service
+journal rows. Migration from the S5 version-2 database is transactional and
+never invokes the engine: an active or incomplete state without an inherited
+child handle becomes `unknown`. Unknown schema versions remain untouched.
+
+Startup and stop ordering are stable across runs. Independent nodes use
+service-name order; stop is the exact reverse. If a partial operation loses
+any required identity, the stack becomes `unknown` and the remaining DAG is
+not continued. The retained committed revision is not restarted automatically
+after a failed `up`; recovery is an explicit operator action and is not a
+public rollback feature.
+
+The initial restart timing candidate is 1, 2, 4, 8, then 16 seconds, with a
+16-second cap, one initial start, and at most five automatic retries in a
+60-second window.
+These numbers remain candidates until the device suite qualifies them.
+Restart policy never authorizes a new process unless prior absence is proven.
+
+`logs` addresses one service, returns stdout and stderr separately, defaults
+to 200 lines and accepts only `--tail 1..=200`. Each stream and the complete
+response are byte-bounded; an oversized response fails explicitly.
 
 Do not develop two slices in parallel when they share an unresolved failure
 mode. Every new SQLite column and state must correspond to a concrete user or
@@ -391,8 +421,12 @@ the public guarantees; see [evidence/S5.md](evidence/S5.md).
 
 ### G2 — MVP
 
-M1 completed: two stacks, at least two services, a DAG, a volume, a port, and
-restart pass smoke and fault tests.
+G2 requires M1 to be completed and two simultaneous multi-service stacks to
+each complete `up/status/logs/restart/down`. Deterministic DAG
+start/reverse-stop, a volume, a port, restart/backoff, and crash recovery must
+pass smoke and fault tests. At least one explicit `down` followed by an `up`
+with a new image must preserve declared volume data while retaining the
+retired rootfs generation.
 
 ### G3 — Package candidate
 

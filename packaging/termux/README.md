@@ -6,7 +6,15 @@ an official Termux recipe or an installation channel.
 The canonical recipe can exist only at
 `termux/termux-packages/packages/termux-stacks/build.sh`. Before copying this
 fixture there, replace every placeholder, select the SQLite strategy, add the
-tested removal scripts, and validate all four Termux architectures.
+release checksum, exercise the removal script, and validate all four Termux
+architectures.
+
+The fixture's `prerm` acts only on an actual package removal. It disables and
+stops the fixed `termux-stacksd` runit service and removes that package-owned
+service directory. It deliberately does nothing during an upgrade, so an
+upgrade neither restarts the daemon nor changes runtime state. The state
+database, logs, volumes and PRoot root filesystems are never package-owned
+removal targets.
 
 ## S0 on-device fallback
 

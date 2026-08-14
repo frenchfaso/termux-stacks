@@ -106,6 +106,18 @@ struct DaemonLock {
     _file: File,
 }
 
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        // An explicit unlock makes orderly in-process handoff deterministic
+        // on every supported Unix. A crash still releases the lock when the
+        // kernel closes the descriptor.
+        // SAFETY: `_file` owns a valid descriptor for the duration of Drop.
+        unsafe {
+            libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl DaemonLock {
     fn acquire(path: &Path) -> Result<Self, Error> {
         if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -215,7 +227,15 @@ impl ControlSocket {
     }
 
     fn serve(&self, runtime: &mut Runtime, shutdown: &AtomicBool) -> Result<(), Error> {
-        while !shutdown.load(Ordering::Relaxed) {
+        let result = loop {
+            if shutdown.load(Ordering::Relaxed) {
+                break Ok(());
+            }
+            if let Err(error) = runtime.tick() {
+                eprintln!(
+                    "termux-stacks daemon: workload supervision tick failed; continuing: {error}"
+                );
+            }
             match self.listener.accept() {
                 Ok((mut stream, _address)) => {
                     if let Err(error) = stream
@@ -235,11 +255,11 @@ impl ControlSocket {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(Error::ServeSocket(error)),
+                Err(error) => break Err(Error::ServeSocket(error)),
             }
-        }
+        };
         runtime.shutdown();
-        Ok(())
+        result
     }
 }
 
@@ -261,11 +281,12 @@ fn handle_connection(
     };
 
     let request_id = request.request_id().to_owned();
+    let cache_request = request.clone();
     let response = match request.validate_envelope() {
         Ok(()) => dispatch(request, runtime),
         Err(error) => Response::failure(request_id, "protocol_error", error.to_string()),
     };
-    if let Err(error) = runtime.cache_response(&response) {
+    if let Err(error) = runtime.cache_response_for_request(&cache_request, &response) {
         eprintln!(
             "termux-stacks daemon: could not cache response for {:?}: {error}",
             response.request_id
@@ -289,7 +310,11 @@ fn dispatch(request: Request, runtime: &mut Runtime) -> Response {
                 ),
                 Ok(None) => Response::success(
                     request_id,
-                    serde_json::json!({"name": stack, "observed_state": "absent"}),
+                    serde_json::json!({
+                        "name": stack,
+                        "observed_state": "absent",
+                        "services": []
+                    }),
                 ),
                 Err(error) => Response::failure(request_id, error.code(), error.to_string()),
             }
@@ -297,11 +322,19 @@ fn dispatch(request: Request, runtime: &mut Runtime) -> Response {
         Request::Up {
             request_id,
             manifest,
+            manifest_base,
             ..
         } => match crate::manifest::parse(&manifest) {
-            Ok(parsed) => match runtime.replay_response(&request_id, "up", &parsed.name) {
+            Ok(parsed) => match runtime.replay_response(
+                &request_id,
+                "up",
+                &parsed.name,
+                Some(&manifest),
+                Some(&manifest_base),
+                None,
+            ) {
                 Ok(Some(response)) => response,
-                Ok(None) => match runtime.up(&request_id, &manifest, &parsed) {
+                Ok(None) => match runtime.up(&request_id, &manifest, &manifest_base, &parsed) {
                     Ok(status) => Response::success(
                         request_id,
                         serde_json::to_value(status).expect("StackStatus is serializable"),
@@ -318,9 +351,61 @@ fn dispatch(request: Request, runtime: &mut Runtime) -> Response {
             if let Err(error) = crate::manifest::validate_stack_name(&stack) {
                 return Response::failure(request_id, error.kind().code(), error.to_string());
             }
-            match runtime.replay_response(&request_id, "down", &stack) {
+            match runtime.replay_response(&request_id, "down", &stack, None, None, None) {
                 Ok(Some(response)) => response,
                 Ok(None) => match runtime.down(&request_id, &stack) {
+                    Ok(status) => Response::success(
+                        request_id,
+                        serde_json::to_value(status).expect("StackStatus is serializable"),
+                    ),
+                    Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+                },
+                Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+            }
+        }
+        Request::Logs {
+            request_id,
+            stack,
+            service,
+            tail,
+            ..
+        } => {
+            if let Err(error) = crate::manifest::validate_stack_name(&stack) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            if let Err(error) = crate::manifest::validate_stack_name(&service) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            match runtime.logs(&stack, &service, tail) {
+                Ok(logs) => Response::success(
+                    request_id,
+                    serde_json::to_value(logs).expect("LogsResult is serializable"),
+                ),
+                Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+            }
+        }
+        Request::Restart {
+            request_id,
+            stack,
+            service,
+            ..
+        } => {
+            if let Err(error) = crate::manifest::validate_stack_name(&stack) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            if let Err(error) = crate::manifest::validate_stack_name(&service) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            match runtime.replay_response(
+                &request_id,
+                "restart",
+                &stack,
+                None,
+                None,
+                Some(&service),
+            ) {
+                Ok(Some(response)) => response,
+                Ok(None) => match runtime.restart(&request_id, &stack, &service) {
                     Ok(status) => Response::success(
                         request_id,
                         serde_json::to_value(status).expect("StackStatus is serializable"),
