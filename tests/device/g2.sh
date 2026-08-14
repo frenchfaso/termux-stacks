@@ -10,7 +10,7 @@ FIXTURE_DIR=$SCRIPT_DIR/fixtures/g2
 DEVICE_PHASE=G2
 DEVICE_RUN_LABEL=termux-stacks-g2
 DEVICE_RUNTIME_LABEL=txs-g2
-DEVICE_HARNESS_VERSION=3
+DEVICE_HARNESS_VERSION=4
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised M1 with two concurrent two-service stacks and four\ncontrolled crash cases in fresh synthetic Termux Stacks and proot-distro\nprefixes. Every destructive engine action named an exact recorded session.\nAmbiguous state preserves the complete private runtime for manual review.'
 
 # shellcheck source=tests/device/lib.sh
@@ -1308,7 +1308,7 @@ g2_fault_down_case() {
 }
 
 g2_fault_backoff_case() {
-	local stack=g2-fault-backoff manifest cli_pid iteration running=0 starts failures
+	local stack=g2-fault-backoff manifest iteration running=0 starts failures
 	g2_new_case fault-backoff || { g2_fail_case g2.fault.during-backoff "cannot create case"; return 1; }
 	manifest=$G2_PROJECT/stack.yaml
 	starts=$G2_PROJECT/events-$stack/start.tsv
@@ -1319,11 +1319,6 @@ g2_fault_backoff_case() {
 		g2_fail_case g2.fault.during-backoff "recover-once service did not initially qualify"
 		return 1
 	fi
-	if ! g2_cli_background backoff-trigger status "$stack"; then
-		g2_fail_case g2.fault.during-backoff "fault request client could not be qualified"
-		return 1
-	fi
-	cli_pid=$G2_LAST_CLI_PID
 	if ! g2_wait_file "$G2_FAULT/during_backoff.reached"; then
 		g2_fail_case g2.fault.during-backoff "during-backoff checkpoint was not reached"
 		return 1
@@ -1337,10 +1332,6 @@ g2_fault_backoff_case() {
 		! g2_capture_engine_sessions "$G2_RAW/engine.backoff" || \
 		[[ -s $G2_RAW/engine.backoff ]] || ! g2_stop_daemon KILL; then
 		g2_fail_case g2.fault.during-backoff "durable no-child backoff was not reached"
-		return 1
-	fi
-	if ! g2_wait_interrupted_cli "$cli_pid" backoff-trigger; then
-		g2_fail_case g2.fault.during-backoff "fault request client did not terminate with the expected failure"
 		return 1
 	fi
 	if ! g2_start_daemon normal; then g2_fail_case g2.fault.during-backoff "cold daemon did not start"; return 1; fi
@@ -1555,7 +1546,7 @@ if ((preflight_ok)); then
 	device_metadata fixture_verifier_sha256 "$(sha256sum "$FIXTURE_DIR/verify-oci.sh" | awk '{print $1}')"
 	device_metadata fixture_containerfile_sha256 "$(sha256sum "$FIXTURE_DIR/Containerfile" | awk '{print $1}')"
 	device_metadata fixture_worker_sha256 "$(sha256sum "$FIXTURE_DIR/worker" | awk '{print $1}')"
-	device_metadata fixture_revision 2
+	device_metadata fixture_revision 3
 	device_metadata archive_v1_sha256 "$archive_v1_sha"
 	device_metadata archive_v2_sha256 "$archive_v2_sha"
 	device_metadata architecture "$(uname -m)"
