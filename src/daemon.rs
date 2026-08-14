@@ -1,12 +1,16 @@
 use crate::paths::RuntimePaths;
+use crate::protocol::{self, Request, Response};
+use crate::runtime::Runtime;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, BufReader};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -20,6 +24,9 @@ pub(crate) enum Error {
     UnsafeSocketPath(PathBuf),
     BindSocket(io::Error),
     SecureSocket(io::Error),
+    ConfigureSocket(io::Error),
+    RegisterSignal(io::Error),
+    InitializeRuntime(crate::runtime::Error),
     ServeSocket(io::Error),
 }
 
@@ -49,6 +56,15 @@ impl fmt::Display for Error {
             Self::SecureSocket(error) => {
                 write!(formatter, "cannot set control socket permissions: {error}")
             }
+            Self::ConfigureSocket(error) => {
+                write!(formatter, "cannot configure control socket: {error}")
+            }
+            Self::RegisterSignal(error) => {
+                write!(formatter, "cannot register shutdown signal: {error}")
+            }
+            Self::InitializeRuntime(error) => {
+                write!(formatter, "cannot initialize runtime: {error}")
+            }
             Self::ServeSocket(error) => write!(formatter, "control socket failed: {error}"),
         }
     }
@@ -61,22 +77,29 @@ pub(crate) fn run() -> Result<(), Error> {
         return Err(Error::RelativePrefix(prefix));
     }
 
-    let paths = RuntimePaths::new(prefix);
+    let paths = RuntimePaths::new(prefix.clone());
     paths.prepare().map_err(Error::PreparePaths)?;
     let daemon_lock = DaemonLock::acquire(paths.lock_path())?;
     let control_socket = ControlSocket::bind(paths.socket_path(), &daemon_lock)?;
+    let mut runtime = Runtime::initialize(paths).map_err(Error::InitializeRuntime)?;
+    control_socket
+        .listener
+        .set_nonblocking(true)
+        .map_err(Error::ConfigureSocket)?;
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))
+        .map_err(Error::RegisterSignal)?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))
+        .map_err(Error::RegisterSignal)?;
 
     println!(
-        "termux-stacks {} daemon scaffold is idle; control API is not implemented (prefix: {})",
+        "termux-stacks {} daemon ready (installation: {}, prefix: {})",
         env!("CARGO_PKG_VERSION"),
-        paths.prefix().display()
+        runtime.installation_id(),
+        prefix.display()
     );
 
-    // Accepting and closing connections keeps the singleton probe reliable
-    // without pretending that the S5 control protocol already exists. S0
-    // deliberately relies on the operating system's default signal
-    // termination; signal-aware draining follows the proot-distro spike.
-    control_socket.serve_scaffold()
+    control_socket.serve(&mut runtime, &shutdown)
 }
 
 struct DaemonLock {
@@ -191,12 +214,120 @@ impl ControlSocket {
         })
     }
 
-    fn serve_scaffold(&self) -> Result<(), Error> {
-        loop {
+    fn serve(&self, runtime: &mut Runtime, shutdown: &AtomicBool) -> Result<(), Error> {
+        while !shutdown.load(Ordering::Relaxed) {
             match self.listener.accept() {
-                Ok((stream, _address)) => drop(stream),
+                Ok((mut stream, _address)) => {
+                    if let Err(error) = stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .and_then(|()| {
+                            stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))
+                        })
+                    {
+                        eprintln!("termux-stacks daemon: cannot bound client socket: {error}");
+                        continue;
+                    }
+                    if let Err(error) = handle_connection(&mut stream, runtime) {
+                        eprintln!("termux-stacks daemon: client request failed: {error}");
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(Error::ServeSocket(error)),
+            }
+        }
+        runtime.shutdown();
+        Ok(())
+    }
+}
+
+fn handle_connection(
+    stream: &mut UnixStream,
+    runtime: &mut Runtime,
+) -> Result<(), protocol::ProtocolError> {
+    let request = {
+        let mut reader = BufReader::new(&mut *stream);
+        match protocol::read_request(&mut reader) {
+            Ok(Some(request)) => request,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                let response = Response::failure("", "protocol_error", error.to_string());
+                protocol::write_frame(stream, &response)?;
+                return Ok(());
+            }
+        }
+    };
+
+    let request_id = request.request_id().to_owned();
+    let response = match request.validate_envelope() {
+        Ok(()) => dispatch(request, runtime),
+        Err(error) => Response::failure(request_id, "protocol_error", error.to_string()),
+    };
+    if let Err(error) = runtime.cache_response(&response) {
+        eprintln!(
+            "termux-stacks daemon: could not cache response for {:?}: {error}",
+            response.request_id
+        );
+    }
+    protocol::write_frame(stream, &response)
+}
+
+fn dispatch(request: Request, runtime: &mut Runtime) -> Response {
+    match request {
+        Request::Status {
+            request_id, stack, ..
+        } => {
+            if let Err(error) = crate::manifest::validate_stack_name(&stack) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            match runtime.status(&stack) {
+                Ok(Some(status)) => Response::success(
+                    request_id,
+                    serde_json::to_value(status).expect("StackStatus is serializable"),
+                ),
+                Ok(None) => Response::success(
+                    request_id,
+                    serde_json::json!({"name": stack, "observed_state": "absent"}),
+                ),
+                Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+            }
+        }
+        Request::Up {
+            request_id,
+            manifest,
+            ..
+        } => match crate::manifest::parse(&manifest) {
+            Ok(parsed) => match runtime.replay_response(&request_id, "up", &parsed.name) {
+                Ok(Some(response)) => response,
+                Ok(None) => match runtime.up(&request_id, &manifest, &parsed) {
+                    Ok(status) => Response::success(
+                        request_id,
+                        serde_json::to_value(status).expect("StackStatus is serializable"),
+                    ),
+                    Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+                },
+                Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+            },
+            Err(error) => Response::failure(request_id, error.kind().code(), error.to_string()),
+        },
+        Request::Down {
+            request_id, stack, ..
+        } => {
+            if let Err(error) = crate::manifest::validate_stack_name(&stack) {
+                return Response::failure(request_id, error.kind().code(), error.to_string());
+            }
+            match runtime.replay_response(&request_id, "down", &stack) {
+                Ok(Some(response)) => response,
+                Ok(None) => match runtime.down(&request_id, &stack) {
+                    Ok(status) => Response::success(
+                        request_id,
+                        serde_json::to_value(status).expect("StackStatus is serializable"),
+                    ),
+                    Err(error) => Response::failure(request_id, error.code(), error.to_string()),
+                },
+                Err(error) => Response::failure(request_id, error.code(), error.to_string()),
             }
         }
     }
@@ -239,6 +370,7 @@ mod tests {
         let stale_listener =
             std::os::unix::net::UnixListener::bind(&stale_path).expect("make stale socket");
         drop(stale_listener);
+        std::thread::sleep(std::time::Duration::from_millis(20));
 
         let recovered =
             ControlSocket::bind(paths.socket_path(), &daemon_lock).expect("recover stale socket");

@@ -85,7 +85,7 @@ TERMUX_PKG_MAINTAINER="@frenchfaso"
 TERMUX_PKG_VERSION="<version>"
 TERMUX_PKG_SRCURL="https://github.com/frenchfaso/termux-stacks/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256="<sha256>"
-TERMUX_PKG_DEPENDS="termux-services"
+TERMUX_PKG_DEPENDS="libsqlite, proot-distro (>= 5.6.0), termux-services"
 TERMUX_PKG_BUILD_IN_SRC=true
 TERMUX_PKG_SERVICE_SCRIPT=(
   "termux-stacksd" 'exec "$PREFIX/bin/termux-stacks" daemon 2>&1'
@@ -99,10 +99,8 @@ termux_step_pre_configure() {
 Notes:
 
 - version/tag and checksum remain placeholders until a release exists;
-- the S0 scaffold depends only on `termux-services`; add
-  `proot-distro (>= 5.6.0)` when the engine adapter enters S5, not before;
-- if SQLite uses the system library, add `libsqlite` to the dependencies and
-  inspect the ELF; declaring it is not enough;
+- S5 adds `proot-distro (>= 5.6.0)` and the system `libsqlite`; the package
+  build must still inspect the ELF to prove that SQLite is not bundled;
 - if a crate enables bundled SQLite, the decision requires an ADR and CVE
   audit;
 - the standard Cargo build/install path in `termux-packages` uses `--locked`

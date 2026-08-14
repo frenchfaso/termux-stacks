@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -33,11 +34,55 @@ fn version_uses_the_real_binary() {
 
 #[test]
 fn unknown_command_uses_the_real_binary() {
-    let output = run(&["up"]);
+    let output = run(&["unknown"]);
 
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(text(&output.stderr).contains("unknown command or option \"up\""));
+    assert!(text(&output.stderr).contains("unknown command or option \"unknown\""));
+}
+
+#[test]
+fn config_validate_uses_the_real_binary() {
+    let prefix = TestPrefix::new("manifest");
+    let manifest = prefix.path().join("termux-stacks.yaml");
+    fs::write(
+        &manifest,
+        "apiVersion: termux-stacks/v1alpha1\nkind: Stack\nmetadata:\n  name: hello\nservices:\n  app:\n    image: alpine:3.22\n",
+    )
+    .expect("write manifest");
+
+    let output = Command::new(binary())
+        .args(["config", "validate"])
+        .arg(&manifest)
+        .output()
+        .expect("validate manifest");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        text(&output.stdout),
+        "valid stack \"hello\": service \"app\", image \"alpine:3.22\"\n"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn config_validate_reports_an_invalid_manifest() {
+    let prefix = TestPrefix::new("invalid-manifest");
+    let manifest = prefix.path().join("termux-stacks.yaml");
+    fs::write(&manifest, "kind: Stack\n").expect("write manifest");
+
+    let output = Command::new(binary())
+        .args(["config", "validate"])
+        .arg(&manifest)
+        .output()
+        .expect("validate manifest");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        text(&output.stderr).contains("[invalid_manifest] missing required field apiVersion"),
+        "{output:?}"
+    );
 }
 
 #[test]
@@ -82,6 +127,76 @@ fn daemon_recovers_a_stale_socket_after_sigkill() {
     restarted.kill_and_wait();
 }
 
+#[test]
+fn status_round_trips_through_the_daemon() {
+    let prefix = TestPrefix::new("status");
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn(prefix.path(), "daemon");
+    wait_until_ready(&mut daemon, &socket);
+
+    let output = Command::new(binary())
+        .args(["status", "hello"])
+        .env("PREFIX", prefix.path())
+        .output()
+        .expect("request status");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        text(&output.stdout).contains("\"observed_state\": \"absent\""),
+        "{output:?}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+    daemon.kill_and_wait();
+}
+
+#[test]
+fn daemon_exits_cleanly_on_sigterm() {
+    let prefix = TestPrefix::new("sigterm");
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn(prefix.path(), "daemon");
+    wait_until_ready(&mut daemon, &socket);
+    daemon.wait_until_stdout_contains("daemon ready");
+
+    let status = daemon.terminate_and_wait();
+    assert!(status.success(), "{status:?}; {}", daemon.diagnostics());
+    assert!(!socket.exists(), "graceful shutdown must remove the socket");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vertical_lifecycle_uses_the_fake_engine_contract() {
+    let prefix = TestPrefix::new("lifecycle");
+    let manifest = prefix.path().join("termux-stacks.yaml");
+    fs::write(
+        &manifest,
+        "apiVersion: termux-stacks/v1alpha1\nkind: Stack\nmetadata:\n  name: hello\nservices:\n  app:\n    image: fake:latest\n",
+    )
+    .expect("write manifest");
+    let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+    let mut daemon = DaemonProcess::spawn(prefix.path(), "daemon");
+    wait_until_ready(&mut daemon, &socket);
+    daemon.wait_until_stdout_contains("daemon ready");
+
+    let up = run_with_prefix(
+        prefix.path(),
+        &["up", manifest.to_str().expect("UTF-8 path")],
+    );
+    assert!(up.status.success(), "{up:?}");
+    assert!(text(&up.stdout).contains("\"observed_state\": \"running\""));
+
+    let down = run_with_prefix(prefix.path(), &["down", "hello"]);
+    assert!(down.status.success(), "{down:?}");
+    assert!(text(&down.stdout).contains("\"observed_state\": \"stopped\""));
+    assert!(
+        prefix
+            .path()
+            .join("var/lib/termux-stacks/logs/hello/app.stdout.log")
+            .is_file()
+    );
+
+    assert!(daemon.terminate_and_wait().success());
+}
+
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_termux-stacks")
 }
@@ -91,6 +206,15 @@ fn run(arguments: &[&str]) -> Output {
         .args(arguments)
         .output()
         .expect("run termux-stacks")
+}
+
+#[cfg(target_os = "linux")]
+fn run_with_prefix(prefix: &Path, arguments: &[&str]) -> Output {
+    Command::new(binary())
+        .args(arguments)
+        .env("PREFIX", prefix)
+        .output()
+        .expect("run termux-stacks with PREFIX")
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -154,6 +278,26 @@ struct DaemonProcess {
 
 impl DaemonProcess {
     fn spawn(prefix: &Path, label: &str) -> Self {
+        let fake_bin = prefix.join("bin");
+        fs::create_dir_all(&fake_bin).expect("create fake engine bin directory");
+        let fake_engine = fake_bin.join("proot-distro");
+        let fake_state = prefix.join("fake-engine");
+        fs::create_dir_all(&fake_state).expect("create fake engine state");
+        if !fake_engine.exists() {
+            let shell = std::env::var_os("PREFIX")
+                .map(|prefix| PathBuf::from(prefix).join("bin/sh"))
+                .unwrap_or_else(|| "/bin/sh".into());
+            fs::write(
+                &fake_engine,
+                format!(
+                    "#!{}\nset -eu\nstate=${{TERMUX_STACKS_FAKE_STATE:?}}\ncase ${{1:-}} in\n  help) printf '%s\\n' 'proot-distro 5.6.0 install run ps kill remove' ;;\n  install) exit 0 ;;\n  run)\n    printf '%s\\n' $$ >\"$state/session\"\n    trap 'rm -f \"$state/session\"; exit 0' TERM INT\n    while :; do sleep 1; done\n    ;;\n  ps) [ ! -f \"$state/session\" ] || cat \"$state/session\" ;;\n  kill) kill -TERM \"$2\" ;;\n  remove) exit 0 ;;\n  *) exit 2 ;;\nesac\n",
+                    shell.display()
+                ),
+            )
+            .expect("write fake engine");
+            fs::set_permissions(&fake_engine, fs::Permissions::from_mode(0o700))
+                .expect("make fake engine executable");
+        }
         let stdout = prefix.join(format!("{label}.stdout"));
         let stderr = prefix.join(format!("{label}.stderr"));
         let stdout_file = fs::File::create(&stdout).expect("create daemon stdout log");
@@ -161,6 +305,15 @@ impl DaemonProcess {
         let child = Command::new(binary())
             .arg("daemon")
             .env("PREFIX", prefix)
+            .env("TERMUX_STACKS_FAKE_STATE", &fake_state)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    fake_bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file))
@@ -192,6 +345,19 @@ impl DaemonProcess {
         child.wait().expect("wait for killed daemon child");
     }
 
+    fn terminate_and_wait(&mut self) -> ExitStatus {
+        let pid = self
+            .child
+            .as_ref()
+            .expect("daemon child already consumed")
+            .id();
+        // SAFETY: the child PID belongs to this test process and remains owned
+        // until wait_until_exit reaps it.
+        let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        assert_eq!(result, 0, "send SIGTERM to daemon");
+        wait_until_exit(self)
+    }
+
     fn diagnostics(&self) -> String {
         format!(
             "stdout={:?}; stderr={:?}",
@@ -202,6 +368,28 @@ impl DaemonProcess {
 
     fn stderr_text(&self) -> String {
         fs::read_to_string(&self.stderr).expect("read daemon stderr")
+    }
+
+    fn wait_until_stdout_contains(&mut self, expected: &str) {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            if fs::read_to_string(&self.stdout).is_ok_and(|text| text.contains(expected)) {
+                return;
+            }
+            if let Some(status) = self.try_wait() {
+                panic!(
+                    "daemon exited before stdout contained {expected:?}: {status}; {}",
+                    self.diagnostics()
+                );
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "daemon stdout did not contain {expected:?} within {READY_TIMEOUT:?}; {}",
+                    self.diagnostics()
+                );
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 }
 

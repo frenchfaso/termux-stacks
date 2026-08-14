@@ -1,6 +1,6 @@
 # Termux Stacks Manifest Specification
 
-**Status:** v0.1 proposal; parser not yet implemented
+**Status:** v0.1 proposal; vertical-slice parser implemented in S5
 **Schema:** `termux-stacks/v1alpha1`
 **Authority:** manifest syntax and semantics
 
@@ -108,7 +108,7 @@ Each service accepts:
 
 | Field | Type | Default |
 |---|---|---|
-| `image` | non-empty string | required |
+| `image` | 1..=2048-character string; no control characters or leading `-` | required |
 | `command` | non-empty array of strings; first element non-empty | absent: OCI command |
 | `environment` | string-to-string map | `{}` |
 | `mounts` | array of mounts | `[]` |

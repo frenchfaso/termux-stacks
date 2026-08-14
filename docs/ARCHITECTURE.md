@@ -133,7 +133,7 @@ $PREFIX/
 ├── var/lib/termux-stacks/
 │   ├── state.db
 │   ├── volumes/<stack>/<volume>/
-│   └── logs/<stack>/<service>.log
+│   └── logs/<stack>/<service>.{stdout,stderr}.log
 ├── var/run/termux-stacks/
 │   ├── daemon.lock
 │   └── daemon.sock
@@ -159,8 +159,9 @@ there is an actual migration to support.
 Initial durability:
 
 - SQLite transactions and foreign keys enabled;
-- bindings, journal mode, and `synchronous` selected by the spike on the
-  Termux filesystem;
+- the S5 checkpoint uses the system SQLite library, `journal_mode=DELETE`,
+  `synchronous=FULL`, a five-second busy timeout, and no transaction across an
+  engine call; storage and crash faults must pass before this becomes final;
 - intent committed before every effect;
 - outcome committed after observing the effect;
 - storage/full errors handled before proceeding.
@@ -282,7 +283,7 @@ is not deleted, retried, or started automatically.
 ### Start
 
 1. record `START_NEW`;
-2. open the log file;
+2. open the separate stdout and stderr log files;
 3. start `proot-distro run --isolated` in the foreground with separate argv
    entries;
 4. capture stdout/stderr separately, exit status, and child/session evidence;

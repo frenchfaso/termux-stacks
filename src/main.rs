@@ -1,6 +1,11 @@
 mod cli;
 mod daemon;
+mod engine;
+mod manifest;
 mod paths;
+mod protocol;
+mod runtime;
+mod store;
 
 use std::process::ExitCode;
 

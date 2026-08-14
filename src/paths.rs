@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub(crate) struct RuntimePaths {
     prefix: PathBuf,
     state_dir: PathBuf,
+    logs_dir: PathBuf,
     run_dir: PathBuf,
     lock_path: PathBuf,
     socket_path: PathBuf,
@@ -16,19 +17,17 @@ impl RuntimePaths {
     pub(crate) fn new(prefix: PathBuf) -> Self {
         let state_dir = prefix.join("var/lib/termux-stacks");
         let run_dir = prefix.join("var/run/termux-stacks");
+        let logs_dir = state_dir.join("logs");
         let lock_path = run_dir.join("daemon.lock");
         let socket_path = run_dir.join("daemon.sock");
         Self {
             prefix,
             state_dir,
+            logs_dir,
             run_dir,
             lock_path,
             socket_path,
         }
-    }
-
-    pub(crate) fn prefix(&self) -> &Path {
-        &self.prefix
     }
 
     pub(crate) fn socket_path(&self) -> &Path {
@@ -39,12 +38,56 @@ impl RuntimePaths {
         &self.lock_path
     }
 
+    pub(crate) fn database_path(&self) -> PathBuf {
+        self.state_dir.join("state.db")
+    }
+
+    pub(crate) fn prepare_stack_log_directory(&self, stack: &str) -> io::Result<()> {
+        ensure_private_subtree(&self.state_dir, &["logs", stack])?;
+        Ok(())
+    }
+
+    pub(crate) fn log_paths(&self, stack: &str, service: &str) -> (PathBuf, PathBuf) {
+        (
+            self.logs_dir
+                .join(stack)
+                .join(format!("{service}.stdout.log")),
+            self.logs_dir
+                .join(stack)
+                .join(format!("{service}.stderr.log")),
+        )
+    }
+
     pub(crate) fn prepare(&self) -> io::Result<()> {
         ensure_directory_tree(&self.prefix, &["var", "lib", "termux-stacks"])?;
         ensure_directory_tree(&self.prefix, &["var", "run", "termux-stacks"])?;
         verify_private_directory(&self.state_dir)?;
         verify_private_directory(&self.run_dir)
     }
+}
+
+fn ensure_private_subtree(base: &Path, components: &[&str]) -> io::Result<()> {
+    verify_private_directory(base)?;
+    let mut current = base.to_path_buf();
+    for component in components {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(invalid_path(
+                    &current,
+                    "private path is not a real directory",
+                ));
+            }
+            Ok(_) => verify_private_directory(&current)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let mut builder = fs::DirBuilder::new();
+                builder.mode(0o700).create(&current)?;
+                verify_private_directory(&current)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn ensure_directory_tree(prefix: &Path, components: &[&str]) -> io::Result<()> {

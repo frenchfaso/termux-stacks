@@ -48,7 +48,8 @@ The bootstrap includes:
   at a time;
 - SQLite with intent/outcome;
 - a `proot-distro` adapter;
-- one rootfs, a foreground process, a log file, and conservative recovery.
+- one rootfs, a foreground process, direct stdout/stderr logs, and conservative
+  recovery.
 
 The subsequent MVP adds:
 
@@ -282,6 +283,20 @@ and raw-bundle checksum are recorded in [evidence/S4.md](evidence/S4.md).
 ## 10. Phase S5 — Vertical slice
 
 **Objective:** a useful end-to-end path that is not yet multi-service.
+
+**Status:** in progress. The 2026-08-14 development checkpoint implements the
+strict vertical parser, exact-version JSON Lines protocol, four-table SQLite
+journal, real engine adapter, foreground supervision, logs, conservative cold
+reconciliation, and `config validate/up/status/down`. On Android aarch64 it
+has passed a normal cycle, stopped-rootfs reuse, exact request replay,
+SIGTERM with an active workload, and SIGKILL-to-`unknown` recovery followed
+by separately qualified manual cleanup. These are engineering checks, not the
+final S5 evidence record.
+
+Still open before G1: the reproducible fake-engine and device harness, all
+required fault points, storage-full behavior, protocol upgrade mismatch,
+20-cycle kill/restart acceptance, the selected S3 tree cases under the daemon,
+and final package/ELF evidence.
 
 Deliverables:
 

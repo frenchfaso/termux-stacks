@@ -110,9 +110,19 @@ adapter or a smaller dependency should be tried first. The language will be
 reconsidered only if the toolchain or multiple essential primitives fail
 systematically on the Termux targets.
 
-## Non-decisions
+## S5 dependency checkpoint
 
-This ADR does not select:
+The vertical slice currently uses `saphyr-parser` for an event-level
+restricted YAML profile, `serde`/`serde_json` for the bounded local protocol,
+`rusqlite` without bundled SQLite, and `signal-hook` for graceful daemon
+termination. `libc` remains the only direct FFI boundary and is used for the
+Android-compatible `flock` call. Native aarch64 tests confirmed dynamic
+`libsqlite3.so` linkage and no Rust toolchain dependency at runtime; the
+four-architecture and advisory/license gates remain open.
+
+## Scope of the original decision
+
+At acceptance time this ADR did not select:
 
 - a YAML parser;
 - a SQLite binding or PRAGMAs;
@@ -120,5 +130,6 @@ This ADR does not select:
 - IPC framing;
 - a signal/socket library.
 
-These decisions must emerge from spikes with measurements, rather than being
-frozen before the first binary.
+The S5 checkpoint above records the choices that have since emerged. Detailed
+protocol, persistence, and packaging contracts remain authoritative in their
+dedicated documents rather than in this language ADR.
