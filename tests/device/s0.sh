@@ -5,6 +5,13 @@ set -u
 set -o pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+
+DEVICE_PHASE=S0
+DEVICE_RUN_LABEL=termux-stacks-s0
+DEVICE_RUNTIME_LABEL=txs-s0
+DEVICE_HARNESS_VERSION=3
+DEVICE_AUTOMATIC_SCOPE=$'The harness tested only the supplied binary, an isolated synthetic PREFIX,\ndaemon singleton/stale recovery, and read-only package/service observations.\nNo package, service, OCI image, or persistent runtime state was mutated.'
+
 # shellcheck source=tests/device/lib.sh
 source "$SCRIPT_DIR/lib.sh"
 

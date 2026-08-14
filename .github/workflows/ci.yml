@@ -17,6 +17,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Validate device harness syntax
+        run: |
+          bash -n tests/device/lib.sh tests/device/s0.sh tests/device/s1.sh
+          bash -n tests/device/fixtures/s1/probe
+
       - name: Install Rust 1.93
         run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
 

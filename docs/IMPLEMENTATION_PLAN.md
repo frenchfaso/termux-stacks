@@ -4,12 +4,16 @@
 **Strategia:** spike prima, vertical slice, poi MVP
 **Implementazione:** Rust, un package/crate, un binario
 
-**Avanzamento:** S0 completata il 2026-08-14. Scaffold, CLI minima, daemon
+**Avanzamento:** S0 e S1 completate il 2026-08-14. Scaffold, CLI minima, daemon
 stub, path privati, lock singleton, CI host, package aarch64 e integrazione
-runit sono verdi. L'harness device v2 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
+runit sono verdi. L'harness device v3 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
 il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
-[evidence/S0.md](evidence/S0.md). La fixture resta intenzionalmente un template
-pre-release: tag pubblico e checksum del tarball GitHub appartengono a G3.
+[evidence/S0.md](evidence/S0.md). S1 ha qualificato `Entrypoint`/`Cmd`, argv,
+environment ordinario non riservato, working directory ed exit status con
+31 PASS, 0 FAIL e 0 SKIP;
+il record è in [evidence/S1.md](evidence/S1.md). La fixture package resta
+intenzionalmente un template pre-release: tag pubblico e checksum del tarball
+GitHub appartengono a G3.
 
 ## 1. Verdetto architetturale
 
@@ -132,7 +136,7 @@ Exit:
   dipendenze dichiarate e `up` potrà acquisire esplicitamente immagini;
 - dimensione ELF, package e dipendenze Cargo/runtime sono registrate.
 
-## 6. Fase S1 — Contratto command
+## 6. Fase S1 — Contratto command — completata
 
 **Obiettivo:** documentare ciò che l'engine esegue davvero.
 
@@ -144,13 +148,13 @@ Creare quattro OCI fixture:
 4. né Entrypoint né Cmd.
 
 Per ciascuna provare `run` senza argomenti e con argomenti dopo `--`.
-Registrare argv guest, PID/process tree, exit status, working directory,
-environment e signal target. Provare separatamente `login -- COMMAND` per
-dimostrare l'effetto della login shell.
+Registrare argv guest, exit status, working directory ed environment. Provare
+separatamente `login -- COMMAND` per dimostrare il confine della shell utente
+con `-c`. PID/process tree e signal target appartengono a S2/S3.
 
 Exit:
 
-- tabella golden verificata su device;
+- tabella golden verificata su device (31 PASS, 0 FAIL, 0 SKIP);
 - `command` del manifest ha una semantica onesta e rifiuta i casi non
   rappresentabili;
 - nessuna concatenazione shell è costruita dal runtime.

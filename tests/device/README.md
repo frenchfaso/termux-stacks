@@ -1,4 +1,11 @@
-# Device harness S0
+# Device harness
+
+Gli harness raccolgono evidenze per i gate eseguiti su Termux reale. S0 prova
+binario/package/runit; S1 qualifica la semantica pubblica di
+`proot-distro run`. Sono separati dagli adapter production e non richiedono il
+daemon Termux Stacks, salvo il test isolato dello scaffold in S0.
+
+## S0 — Bootstrap
 
 Questo harness raccoglie evidenze ripetibili per il checkpoint S0 su un
 dispositivo Termux. Verifica un binario `termux-stacks` **già fornito**: non
@@ -56,7 +63,8 @@ S0 copre:
 7. rilascio del lock e recupero dello socket stale dopo KILL;
 8. ispezione read-only del package e del servizio runit, se installati.
 
-Non contiene test S1-S4, immagini OCI o operazioni `proot-distro`.
+Lo script `s0.sh` non contiene test S1-S4, immagini OCI o operazioni
+`proot-distro`.
 
 ## Evidenze
 
@@ -75,3 +83,30 @@ evidence/
 code `1`; soli `PASS`/`SKIP` producono exit code `0`. `conclusions.md` contiene
 un riepilogo automatico e uno spazio per la revisione manuale. L'harness
 conserva `evidence/` e rimuove soltanto il proprio sottoalbero `work/`.
+
+## S1 — Entrypoint e Cmd
+
+S1 attualmente richiede un device Termux aarch64, `proot-distro 5.6.0`, i
+normali tool core Termux e l'immagine
+`alpine:3.24.1` già visibile nella cache locale. Il preflight evita di
+richiedere intenzionalmente un'immagine assente, ma l'inventario quiet non
+prova architettura o completezza della cache e non certifica una build
+offline. L'harness costruisce quattro fixture locali con
+Entrypoint+Cmd, solo Cmd, solo Entrypoint e nessuno dei due:
+
+```bash
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/s1.sh --output-root "$HOME/termux-stacks-evidence"
+```
+
+Ogni esecuzione genera tag e alias casuali `txs-s1-*`, ne registra l'intent
+prima della creazione e usa soltanto confronti exact-name. Il teardown prova
+la baseline con le interfacce pubbliche, arresta/rimuove solo i propri alias e
+rimuove solo i propri image reference. Non usa mai `clear-cache`, `reset`,
+`remove --all`, glob o un alias preesistente. Se l'inventario diventa ambiguo,
+fallisce senza ampliare il target di cleanup.
+
+La matrice verifica default e override per i quattro shape, argv problematici
+in forma esadecimale, working directory, environment, exit status e il confine
+shell di `login`. Non prova registry delle sessioni o segnali: appartengono a
+S2 e S3.

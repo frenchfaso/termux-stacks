@@ -1,6 +1,6 @@
 # Architettura di Termux Stacks
 
-**Stato:** proposta v0.1; bootstrap S0 completato, spike S1–S4 aperti
+**Stato:** proposta v0.1; S0 e S1 completati, spike S2–S4 aperti
 **Target:** Termux/Android senza root
 **Baseline da verificare:** `proot-distro 5.6.0`
 **Autorità:** componenti interni, persistenza e recovery
@@ -178,6 +178,19 @@ Operazioni v0:
 `--detach` è vietato: scarta stdio e sottrae il processo alla supervisione
 diretta. L'adapter deve catturare stdout, stderr ed exit status.
 
+Il profilo v0 avvia workload con:
+
+```text
+proot-distro run --isolated [--env K=V] [--bind SRC:DEST] ALIAS [-- ARG...]
+```
+
+L'adapter costruisce un vettore argv, mai una command string. Se `command` è
+assente omette `--`; se è presente passa almeno un argomento dopo un solo
+`--`. `--isolated` è il default e vengono riaggiunti soltanto i bind
+dichiarati; shared home, shared tmp e X11 non sono impliciti. `--minimal` è
+fuori da v0 finché non supera uno spike dedicato. `login` e `--detach` non
+avviano workload production.
+
 ### 8.1 Limiti da verificare
 
 Il registry delle sessioni engine è best effort. Un `ps` vuoto non è prova
@@ -186,9 +199,11 @@ fallita. Lo spike deve testare il filesystem reale, failure di `flock` e
 crash; finché non passa, la recovery automatica non promette assenza di
 duplicati.
 
-`run CONTAINER -- ARGS` conserva Entrypoint e sostituisce Cmd. `login --`
-passa invece da una login shell. L'adapter non inventa un raw exec generico:
-supporta la semantica verificata e rifiuta il resto.
+`run CONTAINER -- ARGS` conserva Entrypoint, sostituisce Cmd e non aggiunge
+una shell. `login -- COMMAND` avvolge invece il comando nella shell
+configurata dell'utente con `-c`; non è il percorso runtime. L'adapter non
+inventa un raw exec generico: supporta la semantica verificata e rifiuta il
+resto.
 
 `kill` esegue tree-kill ed escalation propria. La propagazione di TERM al
 guest, PGID e processi figli deve essere misurata. v0.1 non espone
@@ -232,8 +247,8 @@ l'artefatto `absent | owned | ambiguous` e non lo cancella nel terzo caso.
 
 1. registra `START_NEW`;
 2. apre il file log;
-3. avvia `proot-distro run` foreground;
-4. registra child/session evidence;
+3. avvia `proot-distro run --isolated` foreground con argv distinti;
+4. cattura stdout/stderr separati, exit status e child/session evidence;
 5. considera il servizio `running` quando il processo principale è
    osservato vivo;
 6. committa la revisione quando tutti i servizi sono running.
@@ -331,6 +346,7 @@ Richiedono evidenza e ADR separati:
 
 - [PRoot-Distro v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/README.md)
 - [Session registry v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/proot_distro/session.py)
+- [Environment engine v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/proot_distro/commands/login/env.py)
 - [Tree-kill v5.6.0](https://github.com/termux/proot-distro/blob/v5.6.0/proot_distro/commands/kill.py)
 - [termux-services](https://github.com/termux/termux-services)
 - [Termux:Boot](https://github.com/termux/termux-boot)

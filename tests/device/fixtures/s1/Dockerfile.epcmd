@@ -1,0 +1,6 @@
+FROM alpine:3.24.1
+COPY probe /probe
+WORKDIR /fixture-wd
+ENV TSTACK_S1_IMAGE=image-default
+ENTRYPOINT ["/probe", "E1", "E two"]
+CMD ["C1", "C two"]

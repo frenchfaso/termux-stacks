@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # shellcheck shell=bash
 
-# Shared helpers for device harnesses. This file is sourced by s0.sh.
+# Shared helpers for device harnesses.
 
 if [[ -z ${BASH_VERSION:-} ]]; then
 	printf '%s\n' "device harness requires Bash" >&2
@@ -12,7 +12,11 @@ export LC_ALL=C
 export TZ=UTC
 umask 077
 
-DEVICE_HARNESS_VERSION=2
+DEVICE_PHASE=${DEVICE_PHASE:-S0}
+DEVICE_RUN_LABEL=${DEVICE_RUN_LABEL:-termux-stacks-s0}
+DEVICE_RUNTIME_LABEL=${DEVICE_RUNTIME_LABEL:-txs-s0}
+DEVICE_HARNESS_VERSION=${DEVICE_HARNESS_VERSION:-2}
+DEVICE_AUTOMATIC_SCOPE=${DEVICE_AUTOMATIC_SCOPE:-$'The harness tested only the supplied binary, an isolated synthetic PREFIX,\ndaemon singleton/stale recovery, and read-only package/service observations.\nNo package, service, OCI image, or persistent runtime state was mutated.'}
 DEVICE_RUN_DIR=
 DEVICE_WORK_DIR=
 DEVICE_RUNTIME_ROOT=
@@ -48,6 +52,12 @@ device_init() {
 	local output_root=${1-}
 	local canonical_root
 	local runtime_root
+	if [[ ! $DEVICE_PHASE =~ ^[A-Za-z][A-Za-z0-9_-]*$ ||
+		! $DEVICE_RUN_LABEL =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ||
+		! $DEVICE_RUNTIME_LABEL =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+		device_error "invalid harness phase or directory label"
+		return 2
+	fi
 
 	if [[ -z $output_root ]]; then
 		output_root=${TMPDIR:-}
@@ -69,7 +79,7 @@ device_init() {
 		device_error "cannot resolve output root: $output_root"
 		return 2
 	}
-	DEVICE_RUN_DIR=$(mktemp -d "$canonical_root/termux-stacks-s0.XXXXXXXX") || {
+	DEVICE_RUN_DIR=$(mktemp -d "$canonical_root/$DEVICE_RUN_LABEL.XXXXXXXX") || {
 		device_error "cannot create isolated run directory under $canonical_root"
 		return 2
 	}
@@ -92,7 +102,7 @@ device_init() {
 		device_error "cannot resolve runtime root: $runtime_root"
 		return 2
 	}
-	DEVICE_RUNTIME_DIR=$(mktemp -d "$DEVICE_RUNTIME_ROOT/txs-s0.XXXXXXXX") || {
+	DEVICE_RUNTIME_DIR=$(mktemp -d "$DEVICE_RUNTIME_ROOT/$DEVICE_RUNTIME_LABEL.XXXXXXXX") || {
 		device_error "cannot create short runtime directory under $DEVICE_RUNTIME_ROOT"
 		return 2
 	}
@@ -247,7 +257,7 @@ device_cleanup() {
 	fi
 
 	case ${DEVICE_RUNTIME_DIR:-} in
-		"${DEVICE_RUNTIME_ROOT:-}"/txs-s0.*)
+		"${DEVICE_RUNTIME_ROOT:-}/$DEVICE_RUNTIME_LABEL".*)
 			if [[ -d $DEVICE_RUNTIME_DIR && ! -L $DEVICE_RUNTIME_DIR ]]; then
 				rm -rf -- "$DEVICE_RUNTIME_DIR"
 			fi
@@ -255,13 +265,77 @@ device_cleanup() {
 	esac
 }
 
-device_finish() {
+device_write_conclusions() {
+	local conclusion_file=$DEVICE_EVIDENCE_DIR/conclusions.md
+	local conclusion_tmp=$DEVICE_EVIDENCE_DIR/.tstack-finalize.conclusions.$$
 	local overall=PASS
 	local pass_count
 	local fail_count
 	local skip_count
+
+	pass_count=$(awk -F '\t' 'NR > 1 && $2 == "PASS" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE") || return 1
+	fail_count=$(awk -F '\t' 'NR > 1 && $2 == "FAIL" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE") || return 1
+	skip_count=$(awk -F '\t' 'NR > 1 && $2 == "SKIP" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE") || return 1
+	if ((fail_count > 0)); then
+		overall=FAIL
+	fi
+
+	if ! cat >"$conclusion_tmp" <<EOF
+# $DEVICE_PHASE device conclusions
+
+- Overall automatic status: **$overall**
+- PASS: $pass_count
+- FAIL: $fail_count
+- SKIP: $skip_count
+- Evidence directory: \`$DEVICE_EVIDENCE_DIR\`
+
+## Automatic scope
+
+$DEVICE_AUTOMATIC_SCOPE
+
+## Manual review
+
+- Reviewer: _TODO_
+- Device/package gate decision: _TODO_
+- Accepted limitations: _TODO_
+- Follow-up issues: _TODO_
+EOF
+	then
+		rm -f -- "$conclusion_tmp"
+		return 1
+	fi
+	if ! mv -f -- "$conclusion_tmp" "$conclusion_file"; then
+		rm -f -- "$conclusion_tmp"
+		return 1
+	fi
+}
+
+device_mark_bundle_failure() {
+	local detail=${1:-evidence bundle finalization failed}
+	local results_tmp=$DEVICE_EVIDENCE_DIR/.tstack-finalize.results.$$
+
+	if ! awk -F '\t' -v detail="$(device_sanitize_tsv "$detail")" 'BEGIN { OFS = "\t" }
+		$1 == "evidence.sha256" {
+			$2 = "FAIL"
+			$3 = "1"
+			$4 = detail
+			found = 1
+		}
+		{ print }
+		END { if (!found) exit 1 }' "$DEVICE_RESULTS_FILE" >"$results_tmp"; then
+		rm -f -- "$results_tmp"
+		return 1
+	fi
+	if ! mv -f -- "$results_tmp" "$DEVICE_RESULTS_FILE"; then
+		rm -f -- "$results_tmp"
+		return 1
+	fi
+	DEVICE_FAILURE_COUNT=$((DEVICE_FAILURE_COUNT + 1))
+}
+
+device_finish() {
 	local checksum_file=$DEVICE_EVIDENCE_DIR/SHA256SUMS
-	local conclusion_file=$DEVICE_EVIDENCE_DIR/conclusions.md
+	local checksum_tmp=$DEVICE_EVIDENCE_DIR/.tstack-finalize.sha256.$$
 
 	if ((DEVICE_FINISHED)); then
 		return 0
@@ -275,46 +349,43 @@ device_finish() {
 		device_result evidence.sha256 SKIP - "sha256sum is not installed" - -
 	fi
 
-	pass_count=$(awk -F '\t' 'NR > 1 && $2 == "PASS" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE")
-	fail_count=$(awk -F '\t' 'NR > 1 && $2 == "FAIL" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE")
-	skip_count=$(awk -F '\t' 'NR > 1 && $2 == "SKIP" { count += 1 } END { print count + 0 }' "$DEVICE_RESULTS_FILE")
-	if ((fail_count > 0)); then
-		overall=FAIL
+	if ! device_write_conclusions; then
+		device_mark_bundle_failure "conclusions generation failed" || \
+			DEVICE_FAILURE_COUNT=$((DEVICE_FAILURE_COUNT + 1))
+		device_write_conclusions || true
+		device_error "cannot write conclusions atomically"
+		return 1
 	fi
-
-	cat >"$conclusion_file" <<EOF
-# S0 device conclusions
-
-- Overall automatic status: **$overall**
-- PASS: $pass_count
-- FAIL: $fail_count
-- SKIP: $skip_count
-- Evidence directory: \`$DEVICE_EVIDENCE_DIR\`
-
-## Automatic scope
-
-The harness tested only the supplied binary, an isolated synthetic PREFIX,
-daemon singleton/stale recovery, and read-only package/service observations.
-No package, service, OCI image, or persistent runtime state was mutated.
-
-## Manual review
-
-- Reviewer: _TODO_
-- Device/package gate decision: _TODO_
-- Accepted limitations: _TODO_
-- Follow-up issues: _TODO_
-EOF
 
 	if command -v sha256sum >/dev/null 2>&1; then
-		(
+		if (
+			set -o pipefail
 			cd -- "$DEVICE_EVIDENCE_DIR" || exit 1
-			find . -type f ! -name SHA256SUMS -print0 \
+			find . -type f ! -name SHA256SUMS \
+				! -name '.tstack-finalize.*' -print0 \
 				| sort -z \
 				| xargs -0 sha256sum
-		) >"$checksum_file"
+		) >"$checksum_tmp" && mv -f -- "$checksum_tmp" "$checksum_file"; then
+			:
+		else
+			rm -f -- "$checksum_tmp" "$checksum_file"
+			device_mark_bundle_failure "SHA256SUMS generation failed" || \
+				DEVICE_FAILURE_COUNT=$((DEVICE_FAILURE_COUNT + 1))
+			device_write_conclusions || true
+			device_error "cannot generate SHA256SUMS"
+			return 1
+		fi
 	else
-		printf '%s\n' '# sha256sum unavailable; no checksums generated' >"$checksum_file"
+		if ! printf '%s\n' '# sha256sum unavailable; no checksums generated' \
+			>"$checksum_tmp" || ! mv -f -- "$checksum_tmp" "$checksum_file"; then
+			rm -f -- "$checksum_tmp"
+			device_mark_bundle_failure "checksum placeholder generation failed" || \
+				DEVICE_FAILURE_COUNT=$((DEVICE_FAILURE_COUNT + 1))
+			device_write_conclusions || true
+			device_error "cannot write checksum placeholder"
+			return 1
+		fi
 	fi
 
-	printf 'S0 evidence: %s\n' "$DEVICE_EVIDENCE_DIR"
+	printf '%s evidence: %s\n' "$DEVICE_PHASE" "$DEVICE_EVIDENCE_DIR"
 }

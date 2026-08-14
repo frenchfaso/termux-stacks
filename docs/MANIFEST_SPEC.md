@@ -36,9 +36,10 @@ services:
     command: ["/bin/sh", "-c", "while true; do date; sleep 5; done"]
 ```
 
-`command` è oggetto di uno spike obbligatorio. Fino al suo superamento
-l'implementazione può accettare soltanto il comando predefinito dell'immagine
-oppure l'override limitato documentato nella sezione 6.
+La semantica di `command` è stata verificata dallo spike S1 su
+`proot-distro 5.6.0`. È un override del solo OCI `Cmd`: non sostituisce
+`Entrypoint` e non è un raw exec indipendente dall'immagine. Il runtime deve
+fallire chiuso se il capability probe non conferma questo contratto.
 
 Qualunque campo MVP non ancora implementato deve produrre `unsupported`, non
 essere ignorato.
@@ -107,7 +108,7 @@ Ogni servizio ammette:
 | Campo | Tipo | Default |
 |---|---|---|
 | `image` | stringa non vuota | obbligatorio |
-| `command` | array di stringhe | comando OCI |
+| `command` | array non vuoto di stringhe, primo elemento non vuoto | assente: comando OCI |
 | `environment` | mappa stringa→stringa | `{}` |
 | `mounts` | array di mount | `[]` |
 | `ports` | array di porta | `[]` |
@@ -129,28 +130,58 @@ Il percorso raccomandato per test riproducibili è un OCI archive locale o un
 tag immutabile controllato. Tag mutabili sono accettabili solo dichiarando che
 una successiva installazione può usare la cache.
 
-La CLI pubblica di `proot-distro` definisce questa semantica:
+La CLI pubblica di `proot-distro`, verificata su device in S1, definisce
+questa semantica:
 
-- senza `command`, `run` esegue Entrypoint + Cmd, il solo Cmd o il solo
-  Entrypoint; fallisce se entrambi mancano;
-- con `command`, gli argomenti dopo `--` sostituiscono Cmd ma conservano
-  Entrypoint;
-- per immagini senza Entrypoint, `command` diventa il comando eseguito;
-- v0.1 non offre un override generico dell'Entrypoint.
+- se `command` è assente, l'adapter omette `--`: `run` esegue Entrypoint +
+  Cmd, il solo Cmd o il solo Entrypoint; fallisce se entrambi mancano;
+- se `command` è presente, l'adapter emette un solo `--` seguito dagli
+  elementi distinti: l'array sostituisce Cmd ma conserva Entrypoint;
+- senza Entrypoint, il primo elemento non vuoto di `command` è il programma;
+- `command: []` è invalido: `run ALIAS --` equivale a nessun override e non
+  può rappresentare “svuota Cmd”;
+- v0.1 non offre né clear-Cmd né override generico dell'Entrypoint.
 
-L'implementazione deve verificare questa matrice su device prima di abilitare
-`command`. Un array non implica da solo una semantica raw-exec indipendente
-dall'immagine.
+L'adapter costruisce un vettore argv: non concatena, interpreta, espande né
+aggiunge una shell. Spazi, stringhe vuote successive al primo elemento,
+metacaratteri e argomenti che iniziano con `-` restano letterali. L'immagine
+può naturalmente scegliere una shell nel proprio Entrypoint/Cmd o shebang.
+
+v0.1 non espone `workingDirectory`; l'adapter non passa `--work-dir`. Resta
+quindi attivo l'OCI `WorkingDir`, con fallback engine a `/`.
 
 ## 7. Environment
 
 `environment` contiene solo valori letterali. Nomi variabile:
 `^[A-Za-z_][A-Za-z0-9_]*$`.
 
+v0.1 rifiuta le chiavi che `proot-distro` filtra, riscrive o usa per il
+proprio funzionamento:
+
+```text
+ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT
+ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH
+DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE HOME USER TERM COLORTERM PREFIX TMPDIR
+MOZ_FAKE_NO_SANDBOX PULSE_SERVER
+```
+
+Sono inoltre riservate tutte le chiavi che iniziano con `PROOT_` o `LD_`,
+incluse quelle non note alla versione corrente dell'adapter.
+
+Il capability profile può estendere questa lista per una futura versione
+engine, mai ridurla silenziosamente. La restrizione conserva la stessa
+semantica fra immagini Linux normali e rootfs riconosciuti come Termux.
+
 Secret, riferimenti a file, interpolazione host e `fromEndpoint` non sono
 supportati. In particolare, la CLI pubblica dell'engine passa `--env K=V`
 nel proprio argv host; quindi v0.1 non accetta una funzionalità secret che
 prometterebbe di non apparire negli argv.
+
+Ogni coppia letterale non riservata viene passata come un distinto
+`--env K=V`, senza shell. Per queste chiavi il valore del manifest sostituisce
+l'omonimo OCI `Env`; le altre variabili OCI non riservate rimangono
+disponibili. S1 ha verificato override e aggiunta con due chiavi ordinarie;
+non generalizza il risultato alle chiavi gestite dall'engine.
 
 ## 8. Mount e volumi
 
@@ -230,6 +261,8 @@ device. Non sono ancora configurabili nel manifest.
 
 - parsing ristretto e schema;
 - nomi e riferimenti;
+- `command` assente oppure array non vuoto con primo elemento non vuoto;
+- nomi environment validi e non riservati all'engine;
 - path e tipi verificabili senza effetti;
 - ciclo delle dipendenze;
 - conflitti interni fra mount e porte.
