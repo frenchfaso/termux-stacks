@@ -150,5 +150,37 @@ La suite copre:
 5. F3, record locked troncato sullo stesso inode.
 
 L'oracolo usa il child foreground insieme a boot ID, PID, start time, PGID e
-SID; non è un parser production. S2 non prova tree-kill, parent/daemon loss o
-segnali guest: questi casi appartengono a S3.
+SID; non è un parser production. S2 non prova tree-kill, perdita del tracer o
+segnali guest: questi casi appartengono a S3. La perdita del vero daemon e la
+reconciliation appartengono al vertical slice S5.
+
+## S3 — Signal e tree-kill
+
+S3 richiede lo stesso device aarch64 e la stessa baseline engine di S2. Riceve
+un OCI archive esterno benedetto e verifica piattaforma, manifest, config,
+layer, base e bytes del worker prima di installarlo nel proprio
+`TERMUX__PREFIX` sintetico:
+
+```bash
+mkdir -p "$HOME/termux-stacks-evidence"
+bash tests/device/s3.sh \
+  --archive "$HOME/termux-stacks-s3-worker-linux-arm64.oci.tar" \
+  --archive-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output-root "$HOME/termux-stacks-evidence"
+```
+
+Il run di accettazione usa il default di 100 cicli. `--stress-cycles 0..100`
+serve soltanto a run diagnostici; un risultato con meno di 100 cicli non
+chiude S3.
+
+La suite prova un tree cooperativo, TERM ignorato, un grandchild in una nuova
+sessione, due sessioni sullo stesso alias e guest rimasti vivi dopo il
+SIGKILL del tracer PRoot. Il solo target candidato production è
+`proot-distro kill SESSION_PID`. Il TERM diretto al PGID è un controllo
+negativo; alias, `--all` e PID host non sono fallback.
+
+Il drain è PASS soltanto quando ruoli noti, holder del record e tutti i
+PGID/SID qualificati risultano vuoti. In caso ambiguo l'harness attende la TTL,
+fallisce e preserva il sandbox; non amplia mai il target di cleanup. Gli
+eventi e le identità guest vengono copiati nell'evidence prima di rimuovere il
+rootfs.

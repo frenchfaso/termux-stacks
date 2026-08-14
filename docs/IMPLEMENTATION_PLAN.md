@@ -4,7 +4,7 @@
 **Strategia:** spike prima, vertical slice, poi MVP
 **Implementazione:** Rust, un package/crate, un binario
 
-**Avanzamento:** S0–S2 completate il 2026-08-14. Scaffold, CLI minima, daemon
+**Avanzamento:** S0–S3 completate il 2026-08-14. Scaffold, CLI minima, daemon
 stub, path privati, lock singleton, CI host, package aarch64 e integrazione
 runit sono verdi. L'harness device v3 ha chiuso con 24 PASS, 0 FAIL e 0 SKIP;
 il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
@@ -12,8 +12,10 @@ il ciclo runit stateful è PASS. Evidenze e limiti sono registrati in
 environment ordinario non riservato, working directory ed exit status con
 31 PASS, 0 FAIL e 0 SKIP. S2 ha riprodotto tre falsi negativi del session
 registry con 16 PASS, 0 FAIL e 0 SKIP, imponendo `unknown` dopo la perdita
-dell'handle del child. I record sono [evidence/S1.md](evidence/S1.md) ed
-[evidence/S2.md](evidence/S2.md). La fixture package resta
+dell'handle del child. S3 ha qualificato exact-session kill e 100 cicli di
+drain con 15 PASS, 0 FAIL e 0 SKIP. I record sono
+[evidence/S1.md](evidence/S1.md), [evidence/S2.md](evidence/S2.md) ed
+[evidence/S3.md](evidence/S3.md). La fixture package resta
 intenzionalmente un template pre-release: tag pubblico e checksum del tarball
 GitHub appartengono a G3.
 
@@ -174,10 +176,10 @@ La suite minima eseguita su `proot-distro 5.6.0` comprende:
 - F3: JSON troncato sullo stesso inode ancora locked, omesso mentre il
   workload resta vivo e potato dopo l'exit.
 
-Parent/daemon loss e root PRoot terminato con guest ancora vivo passano a S3,
-dove si qualifica anche il target dei segnali. PID reuse sintetico e fault di
-`flock` non aggiungono una garanzia utile dopo i falsi negativi già osservati
-e non sono gate di S2.
+Root PRoot terminato con guest ancora vivo passa a S3, dove si qualifica anche
+il target dei segnali. La perdita del vero daemon e la reconciliation passano
+al vertical slice S5. PID reuse sintetico e fault di `flock` non aggiungono
+una garanzia utile dopo i falsi negativi già osservati e non sono gate di S2.
 
 L'harness deve osservare process tree host indipendentemente da `pd ps` per
 individuare falsi negativi. Ogni caso conserva output raw, exit status e
@@ -191,39 +193,43 @@ e `boot_id/PID/starttime` sono l'evidenza primaria; il registry è
 complementare. Dopo la perdita dell'handle, empty, errore o record malformed
 producono `unknown`: niente restart, recreate o delete automatico.
 
-## 8. Fase S3 — Signal e tree-kill
+## 8. Fase S3 — Signal e tree-kill — completata
 
 **Obiettivo:** qualificare stop e ownership del processo.
 
-Workload:
+La suite eseguita usa:
 
 - processo cooperativo che gestisce TERM;
-- processo che ignora TERM;
+- tree che ignora TERM;
 - figlio e nipote;
 - processo che cambia sessione/process group;
-- parent harness terminato con SIGTERM e SIGKILL mentre il workload resta
-  attivo.
+- tracer PRoot terminato con SIGKILL mentre i guest e gli holder del record
+  restano attivi.
 
-S3 non richiede il daemon Termux Stacks. La strategia scelta viene ripetuta
-sotto il daemon reale in S5, dove entrano in gioco supervisione e recovery.
+S3 non richiede il daemon Termux Stacks. La perdita di un parent artificiale
+non aggiunge un contratto engine rispetto ai casi qualificati; SIGTERM e
+SIGKILL del vero daemon, reaping e recovery vengono provati nel vertical slice
+S5.
 
-Confrontare:
+La matrice ha confrontato:
 
-- segnale al child/PGID host;
-- `proot-distro kill <session-pid|alias>`, dove il PID è quello restituito
-  da `proot-distro ps`;
+- TERM al PGID host come controllo negativo;
+- `proot-distro kill <session-pid>`, dove il PID è quello restituito da
+  `proot-distro ps`;
 - escalation engine;
 - orfani dopo stop.
 
-Eseguire almeno 100 cicli sul workload più semplice. Il test fallisce se
-rimane un guest osservabile o viene segnalato un PID estraneo.
+Alias e `--all` non sono target production e non vengono esercitati. Sono
+stati eseguiti 100 cicli sul workload cooperativo; ogni drain richiede insieme
+ruoli noti assenti, nessun holder del record e PGID/SID qualificati vuoti.
 
-Exit:
+Exit verificato:
 
-- una sola strategia di stop v0;
+- una sola strategia di stop v0, exact session ID;
 - timeout fisso documentato come best effort;
-- nessun `stopGracePeriod` pubblico se il segnale applicativo non è
-  generalizzabile.
+- nessun `stopGracePeriod` pubblico;
+- nessun guest osservabile nei 100 cicli; C3 lascia intatta la seconda
+  sessione con lo stesso alias.
 
 ## 9. Fase S4 — Ownership e crash durante install
 
@@ -267,6 +273,8 @@ Deliverable:
 - reconciliation definita dagli esiti S2–S4;
 - fake engine per test host e adapter reale su device;
 - ripetizione sotto il daemon reale dei test signal/tree-kill scelti in S3;
+- SIGTERM e SIGKILL del daemon mentre il child engine resta attivo, con
+  reaping/recovery fail-closed;
 - upgrade del binario mentre il daemon precedente è vivo: protocol mismatch
   diagnosticato senza proseguire.
 

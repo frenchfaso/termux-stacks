@@ -1,6 +1,6 @@
 # Architettura di Termux Stacks
 
-**Stato:** proposta v0.1; S0–S2 completati, spike S3–S4 aperti
+**Stato:** proposta v0.1; S0–S3 completati, spike S4 aperto
 **Target:** Termux/Android senza root
 **Baseline engine verificata:** `proot-distro 5.6.0`
 **Autorità:** componenti interni, persistenza e recovery
@@ -173,8 +173,8 @@ Operazioni v0:
 - install di immagine/archive con alias;
 - run foreground;
 - list/ps delle sessioni;
-- kill per session identifier emesso da `proot-distro ps` o alias registrato,
-  soltanto dopo la qualificazione S3;
+- kill per session identifier esatto emesso da `proot-distro ps`, soltanto
+  dopo la qualificazione di identità e ownership S3;
 
 `--detach` è vietato: scarta stdio e sottrae il processo alla supervisione
 diretta. L'adapter deve catturare stdout, stderr ed exit status.
@@ -205,8 +205,8 @@ Nel demone vivo, il child handle con `boot_id`, PID e `/proc` start time è
 l'evidenza primaria; una riga positiva del registry è complementare. Dopo un
 crash del demone l'handle è perduto: registry empty, errore di osservazione o
 record malformed significano `unknown`, mai `absent`. v0 non avvia, ricrea o
-cancella automaticamente quel servizio. La strategia di stop resta sospesa
-fino a S3.
+cancella automaticamente quel servizio. Anche una riga positiva resta solo
+evidenza complementare e non ricostruisce da sola l'ownership dopo il crash.
 
 `run CONTAINER -- ARGS` conserva Entrypoint, sostituisce Cmd e non aggiunge
 una shell. `login -- COMMAND` avvolge invece il comando nella shell
@@ -214,10 +214,25 @@ configurata dell'utente con `-c`; non è il percorso runtime. L'adapter non
 inventa un raw exec generico: supporta la semantica verificata e rifiuta il
 resto.
 
-`kill` esegue tree-kill ed escalation propria. La propagazione di TERM al
-guest, PGID e processi figli deve essere misurata. v0.1 non espone
-`stopGracePeriod` configurabile finché una grace applicativa non è
-realizzabile in modo generale.
+S3 ha qualificato un'unica strategia v0:
+
+```text
+proot-distro kill SESSION_PID
+```
+
+Il target è il session identifier esatto già osservato e persistito nella
+stessa generazione del demone. Non viene mai passato a `kill(2)`, non viene
+sostituito dall'alias e non si usa `--all`.
+Il comando engine propaga TERM al tree, attende la propria grace fissa e fa
+escalation; tramite gli holder del record ereditato raggiunge anche guest
+rimasti dopo il SIGKILL del tracer PRoot e discendenti che hanno cambiato
+PGID/SID. Lo spike ha inoltre provato che un TERM al solo PGID è insufficiente
+e che il target esatto non ferma una seconda sessione sullo stesso alias.
+
+L'exit status del comando non prova da solo lo stop: servono precondizioni di
+ownership e l'osservazione disponibile. Se una di esse si perde, l'outcome è
+`unknown` e non esiste fallback a segnali host. La grace engine è best effort
+e non configurabile; v0.1 non espone `stopGracePeriod`.
 
 ## 9. Identità e ownership
 

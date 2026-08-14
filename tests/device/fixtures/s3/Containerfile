@@ -1,0 +1,5 @@
+FROM docker.io/library/alpine@sha256:e7a1a92a5bfeee40966aea60f0796b0e7917cc35591542701834f03a68fa3d18
+
+COPY --chmod=0755 worker /s3-worker
+
+ENTRYPOINT ["/s3-worker"]

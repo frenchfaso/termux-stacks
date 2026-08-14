@@ -21,9 +21,13 @@ OCI di `Entrypoint`/`Cmd`, argv, working directory, environment ordinario ed
 exit status; il record è in [docs/evidence/S1.md](docs/evidence/S1.md). Lo
 spike **S2 è completato**: 16 PASS hanno riprodotto tre falsi negativi del
 session registry e congelato una policy fail-closed; il record è in
-[docs/evidence/S2.md](docs/evidence/S2.md). Non esiste ancora un runtime
-utilizzabile: segnali e ownership devono superare S3–S4 prima del vertical
-slice S5.
+[docs/evidence/S2.md](docs/evidence/S2.md). Anche **S3 è completato**: la
+strategia di stop usa soltanto l'identificatore esatto di sessione, ha drenato
+tree cooperativi, TERM ignorato, un discendente in una nuova sessione e guest
+rimasti dopo la morte del tracer PRoot, oltre a 100 cicli consecutivi. Il
+record è in [docs/evidence/S3.md](docs/evidence/S3.md). Non esiste ancora un
+runtime utilizzabile: l'ownership durante install deve superare S4 prima del
+vertical slice S5.
 
 La direzione architetturale è congelata solo nei punti essenziali:
 
@@ -41,6 +45,13 @@ In particolare, `proot-distro ps` vuoto non prova l'assenza di un workload.
 Finché il demone conserva l'handle del figlio usa PID, start time e boot ID;
 dopo la perdita di quell'handle uno stato non osservabile diventa `unknown` e
 non autorizza restart, recreate o delete automatici.
+
+Nella stessa generazione del demone, quando handle, identità persistita e
+record positivo coincidono, lo stop v0 usa solo
+`proot-distro kill <session-pid>`. Non segnala direttamente quel PID host, non
+usa l'alias e non usa `--all`; l'exit status viene accettato soltanto insieme
+alle precondizioni di ownership. La grace interna dell'engine resta fissa e
+best effort, quindi il manifest non espone `stopGracePeriod`.
 
 ## Primo risultato utilizzabile
 

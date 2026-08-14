@@ -1,0 +1,247 @@
+#!/bin/sh
+
+set -u
+
+umask 077
+
+control_dir=/control
+token=${TSTACK_S3_TOKEN:-}
+mode=${TSTACK_S3_MODE:-}
+ttl=${TSTACK_S3_TTL:-60}
+role=${1:-root}
+
+if [ "$#" -gt 1 ]; then
+	exit 125
+fi
+case $token in
+	[a-z0-9]*) ;;
+	*) exit 125 ;;
+esac
+case $token in
+	*[!a-z0-9-]*) exit 125 ;;
+esac
+if [ "${#token}" -gt 48 ]; then
+	exit 125
+fi
+case $mode in
+	cooperate | ignore | escape | orphan) ;;
+	*) exit 125 ;;
+esac
+case $role in
+	root | child | grandchild) ;;
+	*) exit 125 ;;
+esac
+case $ttl in
+	[1-9] | [1-9][0-9] | 1[01][0-9] | 120) ;;
+	*) exit 125 ;;
+esac
+if [ ! -d "$control_dir" ] || [ ! -w "$control_dir" ] || [ ! -x "$control_dir" ]; then
+	exit 125
+fi
+
+events=$control_dir/$token.events
+ready=$control_dir/$token.ready
+ready_tmp=$control_dir/.$token.ready.$$
+stop=$control_dir/$token.stop
+identity=$control_dir/$token.$role.identity
+identity_tmp=$control_dir/.$token.$role.identity.$$
+
+monotonic_seconds() {
+	IFS=' ' read -r s3_uptime_seconds _s3_uptime_rest </proc/uptime || return 1
+	s3_uptime_seconds=${s3_uptime_seconds%%.*}
+	case $s3_uptime_seconds in
+		'' | *[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$s3_uptime_seconds"
+}
+
+read_identity() {
+	IFS= read -r s3_stat_line <"/proc/$$/stat" || return 1
+	case $s3_stat_line in
+		*') '*) ;;
+		*) return 1 ;;
+	esac
+	s3_stat_rest=${s3_stat_line##*) }
+	# Fields after comm start at state; starttime is the twentieth value.
+	set -- $s3_stat_rest
+	[ "$#" -ge 20 ] || return 1
+	s3_state=$1
+	s3_ppid=$2
+	s3_pgid=$3
+	s3_sid=$4
+	shift 19
+	s3_starttime=$1
+	case $s3_ppid:$s3_pgid:$s3_sid:$s3_starttime in
+		*[!0-9:]*) return 1 ;;
+	esac
+	printf '%s\t%s\t%s\t%s\t%s\n' \
+		"$s3_starttime" "$s3_ppid" "$s3_pgid" "$s3_sid" "$s3_state"
+}
+
+s3_identity_values=$(read_identity) || exit 125
+old_ifs=$IFS
+tab=$(printf '\t')
+IFS=$tab
+read -r starttime ppid pgid sid state <<EOF
+$s3_identity_values
+EOF
+IFS=$old_ifs
+case $starttime:$ppid:$pgid:$sid in
+	*[!0-9:]*) exit 125 ;;
+esac
+
+if [ "$role" = grandchild ] && [ "$mode" = escape ]; then
+	if [ "$pgid" -ne "$$" ] || [ "$sid" -ne "$$" ]; then
+		exit 125
+	fi
+fi
+
+if [ "$role" = root ]; then
+	for artifact in \
+		"$events" "$ready" "$stop" \
+		"$control_dir/$token.root.identity" \
+		"$control_dir/$token.child.identity" \
+		"$control_dir/$token.grandchild.identity"
+	do
+		if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+			exit 125
+		fi
+	done
+	printf 'schema\tevent\ttoken\trole\tpid\tstarttime\tppid\tpgid\tsid\tstate\tmode\tmonotonic\tdetail\n' \
+		>"$events" || exit 125
+else
+	[ -f "$events" ] && [ ! -L "$events" ] || exit 125
+fi
+
+emit_event() {
+	s3_event=$1
+	s3_detail=$2
+	s3_now=$(monotonic_seconds) || return 1
+	printf 'v1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$s3_event" "$token" "$role" "$$" "$starttime" "$ppid" "$pgid" \
+		"$sid" "$state" "$mode" "$s3_now" "$s3_detail" >>"$events"
+}
+
+finish() {
+	s3_reason=$1
+	s3_code=$2
+	trap '' HUP INT TERM
+	emit_event "$s3_reason" - || true
+	if [ "$s3_reason" = TERM ] && [ "$role" = root ] && [ "$mode" = cooperate ]; then
+		s3_wait_iteration=0
+		while [ "$s3_wait_iteration" -lt 20 ]; do
+			if grep -F "${tab}TERM${tab}${token}${tab}child${tab}" "$events" >/dev/null 2>&1 && \
+				grep -F "${tab}TERM${tab}${token}${tab}grandchild${tab}" "$events" >/dev/null 2>&1
+			then
+				break
+			fi
+			s3_wait_iteration=$((s3_wait_iteration + 1))
+			sleep 0.05 || true
+		done
+	fi
+	rm -f -- "$ready_tmp" "$identity_tmp"
+	exit "$s3_code"
+}
+
+case $mode in
+	ignore | escape)
+		trap '' TERM
+		trap 'finish HUP 129' HUP
+		trap 'finish INT 130' INT
+		;;
+	cooperate | orphan)
+		trap 'finish TERM 0' TERM
+		trap 'finish HUP 129' HUP
+		trap 'finish INT 130' INT
+		;;
+esac
+
+now=$(monotonic_seconds) || exit 125
+max_deadline=$((now + ttl))
+if [ "$role" = root ]; then
+	deadline=$max_deadline
+	TSTACK_S3_DEADLINE=$deadline
+	export TSTACK_S3_DEADLINE
+else
+	deadline=${TSTACK_S3_DEADLINE:-}
+	case $deadline in
+		'' | *[!0-9]*) exit 125 ;;
+	esac
+	# A child may inherit an earlier deadline, never one beyond its own TTL cap.
+	if [ "$deadline" -gt "$max_deadline" ]; then
+		exit 125
+	fi
+fi
+
+if [ -e "$identity" ] || [ -L "$identity" ]; then
+	exit 125
+fi
+printf 'v1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+	"$token" "$role" "$$" "$starttime" "$ppid" "$pgid" "$sid" "$state" \
+	"$mode" "$now" >"$identity_tmp" || exit 125
+mv -f -- "$identity_tmp" "$identity" || exit 125
+emit_event IDENTITY - || exit 125
+
+descendant_pid=
+case $role in
+	root)
+		/s3-worker child &
+		descendant_pid=$!
+		;;
+	child)
+		if [ "$mode" = escape ]; then
+			command -v setsid >/dev/null 2>&1 || finish SETSID_UNAVAILABLE 125
+			setsid /s3-worker grandchild &
+		else
+			/s3-worker grandchild &
+		fi
+		descendant_pid=$!
+		;;
+	grandchild)
+		;;
+esac
+
+if [ "$role" = root ]; then
+	child_identity=$control_dir/$token.child.identity
+	grandchild_identity=$control_dir/$token.grandchild.identity
+	iteration=0
+	while [ "$iteration" -lt 50 ]; do
+		if [ -f "$child_identity" ] && [ -f "$grandchild_identity" ] && \
+			kill -0 "$descendant_pid" 2>/dev/null
+		then
+			break
+		fi
+		iteration=$((iteration + 1))
+		sleep 0.1 || finish START_WAIT_FAILED 125
+	done
+	if [ ! -f "$child_identity" ] || [ ! -f "$grandchild_identity" ] || \
+		! kill -0 "$descendant_pid" 2>/dev/null
+	then
+		finish START_FAILED 125
+	fi
+	printf 'v1\t%s\t%s\t%s\t%s\n' \
+		"$token" "$mode" "$$" "$starttime" >"$ready_tmp" || finish READY_FAILED 125
+	mv -f -- "$ready_tmp" "$ready" || finish READY_FAILED 125
+	emit_event READY - || finish EVENT_FAILED 125
+fi
+
+if [ "$mode" = orphan ]; then
+	sleep "$ttl" || finish BLOCKING_SLEEP_FAILED 125
+	finish TTL 124
+fi
+
+while :; do
+	if [ -f "$stop" ]; then
+		finish STOP 0
+	fi
+	now=$(monotonic_seconds) || finish CLOCK_FAILED 125
+	if [ "$now" -ge "$deadline" ]; then
+		finish TTL 124
+	fi
+	if ! sleep 0.1; then
+		case $mode in
+			ignore | escape) continue ;;
+			*) finish SLEEP_FAILED 125 ;;
+		esac
+	fi
+done

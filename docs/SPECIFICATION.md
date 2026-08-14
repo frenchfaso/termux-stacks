@@ -1,6 +1,6 @@
 # Specifica del prodotto Termux Stacks
 
-**Stato:** proposta v0.1; S0–S2 completati, spike S3–S4 aperti
+**Stato:** proposta v0.1; S0–S3 completati, spike S4 aperto
 **Target:** Termux su Android senza root
 **Autorità:** comportamento pubblico del prodotto
 
@@ -165,6 +165,9 @@ STOP_REQUESTED -> STOPPING -> STOPPED
 
 Dopo un crash, qualunque fase incompleta conserva `desired=stopped`: il
 demone riprende lo stop solo per target con identità provata.
+Lo stop v0 usa l'identificatore esatto della sessione engine; non segnala il
+PID host, non allarga il target all'alias e non espone una grace configurabile.
+Se la precondizione di identità si perde, il servizio diventa `unknown`.
 
 ### restart
 
