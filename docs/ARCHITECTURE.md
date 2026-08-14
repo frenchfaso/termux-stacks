@@ -1,6 +1,6 @@
 # Termux Stacks Architecture
 
-**Status:** v0.1 proposal; S0–S5 completed, multi-service MVP open
+**Status:** v0.1 proposal; M1/G2 completed on aarch64, G3 package candidate open
 **Target:** Termux/Android without root access
 **Verified engine baseline:** `proot-distro 5.6.0`
 **Authority:** internal components, persistence, and recovery
@@ -97,8 +97,9 @@ After an upgrade, the already running daemon may be older than the new binary:
 the exact version prevents incompatible CLI and daemon versions from
 continuing silently.
 
-M1 requires protocol version 2. `up` carries the canonical UTF-8 manifest
-base directory so the daemon can resolve and recheck relative binds. `status`
+The M1 implementation uses protocol version 2. `up` carries the canonical
+UTF-8 manifest base directory so the daemon can resolve and recheck relative
+binds. `status`
 returns one stack object containing a service array sorted by service name;
 an absent stack returns exactly its name, `observed_state: "absent"`, and an
 empty service array. `logs` and `restart` always identify one stack/service
@@ -160,7 +161,7 @@ tables:
 - `services`: engine alias, rootfs state, process identity, state, and last exit;
 - `operations`: request ID, intent, phase, and outcome.
 
-M1 requires schema version 3:
+The M1 implementation uses schema version 3:
 
 - `meta`: schema and installation ID;
 - `stacks`: desired/observed state, committed manifest and manifest base, and
@@ -380,10 +381,11 @@ new start, derives stack state, and starts only attempts whose durable backoff
 deadline has elapsed. A long serialized engine operation may delay a tick, so
 backoff values are minimum delays rather than scheduling deadlines.
 
-The initial device-qualification candidate is exponential delay at 1, 2, 4,
-8, then 16 seconds, capped at 16 seconds, with one initial start and at most
-five automatic retries in a 60-second window. It is not a release guarantee until measured on
-Android. A process that remains running for 60 seconds resets the window.
+The G2-qualified schedule uses exponential minimum delays of 1, 2, 4, 8, then
+16 seconds, capped at 16 seconds, with one initial start and at most five
+automatic retries in a 60-second window. The Android run measured both the
+durable deadlines and the corresponding next starts. A process that remains
+running for 60 seconds resets the window.
 `no`, `on-failure`, and `always` never authorize a start when prior absence is
 ambiguous. Every automatic or manual restart persists its own intent before
 stop and start effects.
@@ -424,6 +426,9 @@ S5 verified this behavior at every durable boundary and through 20 consecutive
 crashes immediately after workload start. A recovery command that cannot
 reconstruct the lost child handle changes neither the engine session nor the
 rootfs.
+G2 extended the same fail-closed contract to a partial service DAG, an
+uncommitted multi-service parent operation, an interrupted reverse-order down,
+and one proven-safe retry resumed from durable backoff.
 
 ## 12. Update
 

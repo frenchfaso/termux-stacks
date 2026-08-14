@@ -39,7 +39,13 @@ mismatch, cooperative and TERM-ignoring process trees, real SQLite-full
 rollback, all six crash checkpoints, and 20 consecutive post-start daemon
 crashes. The current source package and stripped Android release ELF were
 also rebuilt and inspected. The record is in
-[docs/evidence/S5.md](docs/evidence/S5.md). Multi-service work remains open.
+[docs/evidence/S5.md](docs/evidence/S5.md). **M1 and G2 are complete on
+aarch64**: the multi-service MVP passed its final Android run with 14 PASS,
+0 FAIL, and 0 SKIP across two concurrent two-service stacks, logs and isolated
+service restarts, ports, an image update with persistent volume data, bounded
+restart/backoff, and four crash-recovery boundaries. The reviewed record is in
+[docs/evidence/G2.md](docs/evidence/G2.md). The G3 four-architecture package
+candidate remains open.
 
 Only the essential architectural decisions are frozen:
 
@@ -65,9 +71,10 @@ use the alias, or use `--all`; the exit status is accepted only together with
 the ownership preconditions. The engine's grace period remains fixed and
 best effort, so the manifest does not expose `stopGracePeriod`.
 
-## First usable result
+## MVP command surface
 
-The first vertical slice supports one service and only these commands:
+The MVP supports multiple stacks and services through this small command
+surface:
 
 ```sh
 # after installing termux-services and restarting the shell
@@ -75,16 +82,18 @@ sv-enable termux-stacksd
 termux-stacks config validate ./termux-stacks.yaml
 termux-stacks up ./termux-stacks.yaml
 termux-stacks status notes
+termux-stacks logs notes api --tail 200
+termux-stacks restart notes api
 termux-stacks down notes
 ```
 
-This validates the complete manifest → daemon → SQLite → `proot-distro` →
-log → recovery path. The subsequent MVP adds multiple stacks and services,
-simple dependencies, environment variables, volumes, fixed loopback ports,
-restart, and logs. Jobs, secret management, builds, automatic ports, advanced
-update/rollback, and Compose compatibility are deferred.
+This covers the manifest → daemon → SQLite → `proot-distro` → log → recovery
+path for multiple services, including simple dependencies, literal environment
+variables, volumes, binds, fixed loopback ports, restart, and bounded logs.
+Jobs, secret management, builds, automatic ports, advanced update/rollback,
+and Compose compatibility are deferred.
 
-Planned MVP manifest:
+MVP manifest:
 
 ```yaml
 apiVersion: termux-stacks/v1alpha1

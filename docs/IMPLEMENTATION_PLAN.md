@@ -23,9 +23,13 @@ inventory after invocation may have begun is always `ambiguous`. Its record is
 slice with 33 PASS, 0 FAIL, and 0 SKIP, including every durable crash boundary,
 20 post-start crash cycles, tree-stop behavior, protocol mismatch, SQLite-full
 rollback, and the current aarch64 package. Its record is
-[evidence/S5.md](evidence/S5.md). The package fixture intentionally remains a
+[evidence/S5.md](evidence/S5.md). M1 and G2 then completed the multi-service
+MVP with 14 PASS, 0 FAIL, and 0 SKIP on aarch64: two concurrent two-service
+stacks, the complete public lifecycle, resources, update retention,
+restart/backoff, and four crash-recovery boundaries. Its record is
+[evidence/G2.md](evidence/G2.md). The package fixture intentionally remains a
 pre-release template: the public tag, four-architecture build, and GitHub
-tarball checksum belong to G3.
+tarball checksum belong to G3, which remains open.
 
 ## 1. Architecture verdict
 
@@ -56,7 +60,7 @@ The bootstrap includes:
 - one rootfs, a foreground process, direct stdout/stderr logs, and conservative
   recovery.
 
-The subsequent MVP adds:
+M1 added:
 
 - multiple stacks and services;
 - a `dependsOn` DAG;
@@ -341,9 +345,12 @@ Exit criteria:
 - the exact source commit builds into an inspected aarch64 Termux package with
   the required dynamic libraries and no debug fault hooks in the release ELF.
 
-## 11. Phase M1 — Multi-service MVP
+## 11. Phase M1 — Multi-service MVP — completed
 
-It starts only after S0–S5.
+**Status:** completed on 2026-08-14. Protocol version 2, schema version 3, the
+eight vertical slices below, host CI, and the final aarch64 G2 device suite are
+green. The accepted run completed with 14 PASS, 0 FAIL, and 0 SKIP; see
+[evidence/G2.md](evidence/G2.md).
 
 Incremental vertical slices, each complete with tests and recovery:
 
@@ -374,10 +381,10 @@ not continued. The retained committed revision is not restarted automatically
 after a failed `up`; recovery is an explicit operator action and is not a
 public rollback feature.
 
-The initial restart timing candidate is 1, 2, 4, 8, then 16 seconds, with a
+The G2-qualified restart timing is 1, 2, 4, 8, then 16 seconds, with a
 16-second cap, one initial start, and at most five automatic retries in a
-60-second window.
-These numbers remain candidates until the device suite qualifies them.
+60-second window. The Android run measured every durable deadline and the
+corresponding next start at or beyond those minimum delays.
 Restart policy never authorizes a new process unless prior absence is proven.
 
 `logs` addresses one service, returns stdout and stderr separately, defaults
@@ -421,12 +428,13 @@ the public guarantees; see [evidence/S5.md](evidence/S5.md).
 
 ### G2 — MVP
 
-G2 requires M1 to be completed and two simultaneous multi-service stacks to
-each complete `up/status/logs/restart/down`. Deterministic DAG
-start/reverse-stop, a volume, a port, restart/backoff, and crash recovery must
-pass smoke and fault tests. At least one explicit `down` followed by an `up`
-with a new image must preserve declared volume data while retaining the
-retired rootfs generation.
+Completed on 2026-08-14. M1 and two simultaneous multi-service stacks passed
+`up/status/logs/restart/down`, deterministic DAG start/reverse-stop, volumes,
+fixed ports, the qualified restart/backoff schedule, and four crash-recovery
+cases. An explicit `down` followed by `up` with a new image preserved declared
+volume data and retained both replaced rootfs generations. The final aarch64
+run completed with 14 PASS, 0 FAIL, and 0 SKIP; see
+[evidence/G2.md](evidence/G2.md). G3 remains open.
 
 ### G3 — Package candidate
 

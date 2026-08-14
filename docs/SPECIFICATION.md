@@ -1,6 +1,6 @@
 # Termux Stacks Product Specification
 
-**Status:** v0.1 proposal; S0–S5 completed, multi-service MVP open
+**Status:** v0.1 proposal; M1/G2 completed on aarch64, G3 package candidate open
 **Target:** Termux on unrooted Android
 **Authority:** public product behavior
 
@@ -230,12 +230,11 @@ that case as `unknown` and does not restart it automatically. `on-failure`
 therefore applies to a proven normal non-zero exit in v0.1; `always` applies to
 proven normal exits. Restart policy never weakens the identity rules.
 
-The initial backoff candidate is 1, 2, 4, 8, then 16 seconds, capped at
-16 seconds, with one initial start and at most five automatic retries in a
-60-second crash-loop window.
-It is a required candidate for device qualification, not yet a measured
-release guarantee. A process that remains running for 60 seconds resets the
-window.
+The G2-qualified backoff schedule uses minimum delays of 1, 2, 4, 8, then
+16 seconds, capped at 16 seconds, with one initial start and at most five
+automatic retries in a 60-second crash-loop window. The Android run measured
+both the durable deadlines and the corresponding next starts. A process that
+remains running for 60 seconds resets the window.
 
 ## 8. Networking and Storage
 
@@ -352,3 +351,7 @@ v0.1 is ready only when multiple multi-service stacks complete
 no rootfs is shared, and a daemon kill/restart campaign creates no observable
 duplicates. An engine limitation that prevents this property must reduce the
 public guarantee or stop the milestone.
+
+G2 qualified this criterion on one aarch64 Android device with two concurrent
+two-service stacks and four controlled crash cases. Package and release
+qualification remain part of G3.

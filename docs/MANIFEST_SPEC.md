@@ -1,6 +1,6 @@
 # Termux Stacks Manifest Specification
 
-**Status:** v0.1 proposal; vertical-slice parser implemented in S5
+**Status:** v0.1 proposal; M1 schema implemented and qualified by G2
 **Schema:** `termux-stacks/v1alpha1`
 **Authority:** manifest syntax and semantics
 
@@ -22,9 +22,10 @@ The parser MUST:
 v0.1 has no variables, `x-*` extensions, public canonicalization, manifest
 digest, or lockfile.
 
-## 2. Vertical Slice Profile
+## 2. Historical Vertical Slice Profile
 
-The first slice accepts exactly one service and only the following fields:
+The completed S5 slice accepted exactly one service and only the following
+fields:
 
 ```yaml
 apiVersion: termux-stacks/v1alpha1
@@ -42,8 +43,8 @@ The semantics of `command` were verified by the S1 spike on
 `Entrypoint` and is not a raw exec independent of the image. The runtime must
 fail closed if the capability probe does not confirm this contract.
 
-Any MVP field that has not yet been implemented must produce `unsupported`,
-not be ignored.
+The completed M1 parser accepts the MVP schema below. Deferred fields remain
+unavailable and must fail explicitly; they are never ignored.
 
 ## 3. MVP Schema
 
@@ -280,12 +281,11 @@ Allowed values:
 No restart policy authorizes a start until absence of the previous process is
 proven. A signal observed on the foreground tracer does not prove that the
 whole guest tree is absent and therefore produces `unknown`, without an
-automatic restart, in v0.1. The initial device-qualification candidate uses
-delays of 1, 2, 4, 8, then 16 seconds, capped at 16 seconds, with one initial
-start and at most five automatic retries in a 60-second window. A process
-running continuously for 60 seconds resets the
-window. These values are not configurable and are not a release guarantee
-until the Android suite qualifies them.
+automatic restart, in v0.1. The G2-qualified schedule uses minimum delays of
+1, 2, 4, 8, then 16 seconds, capped at 16 seconds, with one initial start and
+at most five automatic retries in a 60-second window. A process running
+continuously for 60 seconds resets the window. These values are not
+configurable.
 
 ## 12. Validation
 
