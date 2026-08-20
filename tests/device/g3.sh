@@ -9,7 +9,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEVICE_PHASE=G3
 DEVICE_RUN_LABEL=termux-stacks-g3
 DEVICE_RUNTIME_LABEL=txs-g3
-DEVICE_HARNESS_VERSION=3
+DEVICE_HARNESS_VERSION=4
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised only the two explicitly supplied local termux-stacks\npackages and the fixed termux-stacksd service. It required an absent package,\nservice and runtime plus an absent or empty state baseline, used one owned\nmarker, and restored that exact baseline. Only after both ordinary-removal and\nreinstall proofs did it purge that exact package to clear Debian conffiles. It\nnever removed unknown state or targeted an unqualified process.'
 
 # shellcheck source=tests/device/lib.sh
