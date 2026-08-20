@@ -509,7 +509,8 @@ jobs:
           wrong_cwd_rc=0
           (
             cd "$render_dir"
-            PRERM_TEST_ROOT=$test_root \
+            SVDIR=$prefix/var/service \
+              PRERM_TEST_ROOT=$test_root \
               PRERM_TEST_LOG=$results/wrong-cwd.commands \
               PRERM_SCENARIO=inaccessible-cwd \
               PRERM_LIVE_PID=$$ \
