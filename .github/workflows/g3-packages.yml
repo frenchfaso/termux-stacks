@@ -367,6 +367,203 @@ jobs:
           ) 2>&1 | tee "$EVIDENCE_DIR/recipe/lint.log"
           [[ $(git -C "$TERMUX_PACKAGES_DIR" rev-parse HEAD) == "$TERMUX_PACKAGES_COMMIT" ]]
 
+      - name: Test rendered Debian removal hook
+        run: |
+          set -euo pipefail
+          test_root=$RUNNER_TEMP/prerm-test
+          prefix=$test_root/prefix
+          render_dir=$test_root/render
+          results=$test_root/results
+          service_dir=$prefix/var/service/termux-stacksd
+          recipe=$TERMUX_PACKAGES_DIR/packages/termux-stacks/build.sh
+          mkdir -p "$prefix/bin" "$service_dir/supervise" "$render_dir" "$results"
+
+          (
+            cd "$render_dir"
+            TERMUX_PREFIX=$prefix
+            TERMUX_PACKAGE_FORMAT=debian
+            TERMUX_SCRIPTDIR=$TERMUX_PACKAGES_DIR
+            source "$recipe"
+            termux_step_create_debscripts
+          )
+          prerm=$render_dir/prerm
+          [[ -x $prerm && ! -L $prerm ]]
+          dash -n "$prerm"
+
+          cat >"$prefix/bin/touch" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          [[ $# -eq 1 ]]
+          : >>"$1"
+          SCRIPT
+          cat >"$prefix/bin/sleep" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'sleep %s\n' "$*" >>"$PRERM_TEST_LOG"
+          SCRIPT
+          cat >"$prefix/bin/sv" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          [[ ${SVDIR:-} == "$PRERM_TEST_ROOT/prefix/var/service" ]]
+          printf 'sv %s\n' "$*" >>"$PRERM_TEST_LOG"
+          pid_file=$PRERM_TEST_ROOT/prefix/var/service/termux-stacksd/supervise/pid
+          count_file=$PRERM_TEST_ROOT/status-count
+
+          if [[ ${1:-} == -w ]]; then
+            [[ $# -eq 4 && $2 == 20 && $3 == down && $4 == termux-stacksd ]]
+            case $PRERM_SCENARIO in
+              false-negative)
+                printf '%s\n' 'timeout: down: termux-stacksd'
+                exit 1
+                ;;
+              inactive)
+                printf '%s\n' 'fail: termux-stacksd: runsv not running'
+                exit 1
+                ;;
+              persistent-pid)
+                printf '%s\n' 'timeout: down: termux-stacksd'
+                exit 1
+                ;;
+              restarted-pid)
+                printf '%s\n' "$PRERM_LIVE_PID" >"$pid_file"
+                printf '%s\n' 'ok: down: termux-stacksd'
+                exit 0
+                ;;
+              logger-suffix | rc0-run | want-up)
+                printf '%s\n' 'ok: down: termux-stacksd'
+                exit 0
+                ;;
+              *) exit 97 ;;
+            esac
+          fi
+
+          [[ $# -eq 2 && $1 == status && $2 == termux-stacksd ]]
+          count=0
+          if [[ -f $count_file ]]; then
+            IFS= read -r count <"$count_file"
+          fi
+          count=$((count + 1))
+          printf '%s\n' "$count" >"$count_file"
+          case $PRERM_SCENARIO in
+            false-negative)
+              if [[ $count -eq 1 ]]; then
+                printf '%s\n' 'warning: transient supervise status failure'
+                exit 1
+              fi
+              printf '%s\n' 'down: termux-stacksd: 0s; run: log: (pid 4242) 1s'
+              ;;
+            inactive)
+              printf '%s\n' 'fail: termux-stacksd: runsv not running'
+              exit 1
+              ;;
+            logger-suffix | persistent-pid | restarted-pid)
+              printf '%s\n' 'down: termux-stacksd: 0s; run: log: (pid 4242) 1s'
+              ;;
+            rc0-run)
+              printf '%s\n' 'run: termux-stacksd: (pid 4243) 0s'
+              ;;
+            want-up)
+              printf '%s\n' 'down: termux-stacksd: 0s, normally up, want up'
+              ;;
+            *) exit 98 ;;
+          esac
+          SCRIPT
+          chmod 0700 "$prefix/bin/touch" "$prefix/bin/sleep" "$prefix/bin/sv"
+
+          reset_case() {
+            local label=$1
+            rm -f -- "$service_dir/down" "$test_root/status-count"
+            : >"$service_dir/supervise/pid"
+            : >"$results/$label.commands"
+          }
+
+          run_prerm() {
+            local expectation=$1 scenario=$2
+            local stdout=$results/$scenario.stdout
+            local stderr=$results/$scenario.stderr
+            reset_case "$scenario"
+            if PRERM_TEST_ROOT=$test_root \
+              PRERM_TEST_LOG=$results/$scenario.commands \
+              PRERM_SCENARIO=$scenario \
+              PRERM_LIVE_PID=$$ \
+              dash "$prerm" remove >"$stdout" 2>"$stderr"; then
+              [[ $expectation == success ]]
+            else
+              [[ $expectation == failure ]]
+            fi
+            [[ -f $service_dir/down && ! -L $service_dir/down ]]
+          }
+
+          run_prerm success false-negative
+          [[ $(<"$test_root/status-count") == 2 ]]
+          grep -Fq 'sv down rc=1: timeout: down: termux-stacksd' \
+            "$results/false-negative.stderr"
+          grep -Fq 'sv status attempt 1/5 rc=1: warning: transient supervise status failure' \
+            "$results/false-negative.stderr"
+          grep -Fq 'sv status attempt 2/5 rc=0: down: termux-stacksd: 0s; run: log:' \
+            "$results/false-negative.stderr"
+
+          run_prerm success inactive
+          [[ $(<"$test_root/status-count") == 1 ]]
+          grep -Fq 'sv status attempt 1/5 rc=1: fail: termux-stacksd: runsv not running' \
+            "$results/inactive.stderr"
+
+          run_prerm success logger-suffix
+          [[ $(<"$test_root/status-count") == 1 ]]
+
+          run_prerm failure rc0-run
+          [[ $(<"$test_root/status-count") == 5 ]]
+          grep -Fq 'sv down rc=0: ok: down: termux-stacksd' "$results/rc0-run.stderr"
+          grep -Fq 'sv status attempt 5/5 rc=0: run: termux-stacksd:' \
+            "$results/rc0-run.stderr"
+          grep -Fq 'service stop could not be proven after 5 status attempts' \
+            "$results/rc0-run.stderr"
+
+          run_prerm failure want-up
+          [[ $(<"$test_root/status-count") == 5 ]]
+          grep -Fq 'normally up, want up' "$results/want-up.stderr"
+
+          reset_case persistent-pid
+          printf '%s\n' "$$" >"$service_dir/supervise/pid"
+          if PRERM_TEST_ROOT=$test_root \
+            PRERM_TEST_LOG=$results/persistent-pid.commands \
+            PRERM_SCENARIO=persistent-pid \
+            PRERM_LIVE_PID=$$ \
+            dash "$prerm" remove >"$results/persistent-pid.stdout" \
+              2>"$results/persistent-pid.stderr"; then
+            false
+          fi
+          [[ $(<"$test_root/status-count") == 5 ]]
+          grep -Fq 'service stop could not be proven after 5 status attempts' \
+            "$results/persistent-pid.stderr"
+
+          run_prerm failure restarted-pid
+          grep -Fq 'supervised daemon PID changed after stop request' \
+            "$results/restarted-pid.stderr"
+
+          reset_case upgrade
+          PRERM_TEST_ROOT=$test_root \
+            PRERM_TEST_LOG=$results/upgrade.commands \
+            PRERM_SCENARIO=upgrade \
+            PRERM_LIVE_PID=$$ \
+            dash "$prerm" upgrade 0.1.0 >"$results/upgrade.stdout" \
+              2>"$results/upgrade.stderr"
+          [[ ! -e $service_dir/down && ! -L $service_dir/down ]]
+          [[ ! -s $results/upgrade.commands ]]
+
+          sha256sum "$prerm" >"$results/prerm.sha256"
+          printf '%s\n' \
+            'false-negative=PASS' \
+            'inactive=PASS' \
+            'logger-suffix=PASS' \
+            'rc0-run=PASS' \
+            'want-up=PASS' \
+            'persistent-pid=PASS' \
+            'restarted-pid=PASS' \
+            'upgrade-inert=PASS' \
+            >"$results/summary.txt"
+          cp -a -- "$results" "$EVIDENCE_DIR/recipe/prerm-tests"
+
       - name: Pull pinned builder and build package
         run: |
           set -euo pipefail
@@ -486,12 +683,19 @@ jobs:
           grep -Fq '[ "${1:-}" = remove ]' "$control_dir/prerm"
           grep -Fq '/bin/sv" -w 20 down termux-stacksd' "$control_dir/prerm"
           grep -Fq 'stop_rc=$?' "$control_dir/prerm"
+          grep -Fq 'stop_output=$(SVDIR=' "$control_dir/prerm"
           grep -Fq "'fail: termux-stacksd: runsv not running'" "$control_dir/prerm"
           grep -Fq 'elapsed=${elapsed%s}' "$control_dir/prerm"
           grep -Fq 'stop_proven=1' "$control_dir/prerm"
+          grep -Fq 'status_attempt_limit=5' "$control_dir/prerm"
+          grep -Fq 'sv status attempt %s/%s rc=%s: %s' "$control_dir/prerm"
           grep -Fq 'previous_service_pid=${service_pid}' "$control_dir/prerm"
+          grep -Fq 'observed_before_status=${service_pid}' "$control_dir/prerm"
+          grep -Fq 'observed_after_status=${service_pid}' "$control_dir/prerm"
+          grep -Fq 'observed_final_pid=${service_pid}' "$control_dir/prerm"
           grep -Fq 'kill -0 "${observed_pid}"' "$control_dir/prerm"
           grep -Fq '/bin/touch" "${down_file}" || exit 1' "$control_dir/prerm"
+          grep -Fq '/bin/sleep" 1 || exit 1' "$control_dir/prerm"
           grep -Fq '/var/service/termux-stacksd' "$control_dir/prerm"
           if grep -Fq 'rm -rf' "$control_dir/prerm"; then false; fi
           if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \

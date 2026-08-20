@@ -559,9 +559,12 @@ The historical old artifact must declare
 must replace that historical range with the release pin
 `proot-distro (= 5.6.0)`.
 The service files must be the exact conffile set. The new package must contain
-a removal-only `prerm` that disables the fixed service without deleting it and
-a purge-only `postrm` that deletes only that fixed service directory; neither
-hook may name durable or ephemeral runtime state. Install hooks are rejected.
+a removal-only `prerm` that creates the fixed `down` marker, requests a bounded
+stop, and requires a bounded exact terminal-status plus PID proof without
+deleting the service. Its stop and status diagnostics must remain visible in
+APT output. The purge-only `postrm` deletes only that fixed service directory;
+neither hook may name durable or ephemeral runtime state. Install hooks are
+rejected.
 
 The acceptance sequence is:
 

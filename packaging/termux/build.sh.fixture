@@ -40,6 +40,7 @@ termux_step_create_debscripts() {
 				umask 077
 				"${TERMUX_PREFIX}/bin/touch" "\${down_file}" || exit 1
 				[ -x "${TERMUX_PREFIX}/bin/sv" ] || exit 1
+				[ -x "${TERMUX_PREFIX}/bin/sleep" ] || exit 1
 				pid_file="\${service_dir}/supervise/pid"
 				read_service_pid() {
 					service_pid=
@@ -58,25 +59,58 @@ termux_step_create_debscripts() {
 				previous_service_pid=\${service_pid}
 
 				stop_rc=0
-				SVDIR="${TERMUX_PREFIX}/var/service" \
+				stop_output=\$(SVDIR="${TERMUX_PREFIX}/var/service" \
 					"${TERMUX_PREFIX}/bin/sv" -w 20 down termux-stacksd \
-					>/dev/null 2>&1 || stop_rc=\$?
+					2>&1) || stop_rc=\$?
+				printf 'termux-stacks: sv down rc=%s: %s\n' \
+					"\${stop_rc}" "\${stop_output:-<empty>}" >&2
 
-				read_service_pid
-				for observed_pid in "\${previous_service_pid}" "\${service_pid}"; do
-					if [ -n "\${observed_pid}" ] && kill -0 "\${observed_pid}" 2>/dev/null; then
+				status_attempt=0
+				status_attempt_limit=5
+				stop_proven=0
+				service_status=
+				status_rc=0
+				while [ "\${status_attempt}" -lt "\${status_attempt_limit}" ]; do
+					status_attempt=\$((status_attempt + 1))
+					read_service_pid
+					observed_before_status=\${service_pid}
+					if [ -n "\${observed_before_status}" ] && \
+						[ "\${observed_before_status}" != "\${previous_service_pid}" ]; then
 						printf '%s\n' \
-							'termux-stacks: supervised daemon did not stop; removal aborted' >&2
+							'termux-stacks: supervised daemon PID changed after stop request; removal aborted' >&2
 						exit 1
 					fi
-				done
-				if [ "\${stop_rc}" -ne 0 ]; then
+
+					status_rc=0
 					service_status=\$(SVDIR="${TERMUX_PREFIX}/var/service" \
-						"${TERMUX_PREFIX}/bin/sv" status termux-stacksd 2>&1 || :)
-					stop_proven=0
+						"${TERMUX_PREFIX}/bin/sv" status termux-stacksd 2>&1) || \
+						status_rc=\$?
+					printf 'termux-stacks: sv status attempt %s/%s rc=%s: %s\n' \
+						"\${status_attempt}" "\${status_attempt_limit}" "\${status_rc}" \
+						"\${service_status:-<empty>}" >&2
+
+					read_service_pid
+					observed_after_status=\${service_pid}
+					if [ -n "\${observed_after_status}" ] && \
+						[ "\${observed_after_status}" != "\${previous_service_pid}" ]; then
+						printf '%s\n' \
+							'termux-stacks: supervised daemon PID changed during stop proof; removal aborted' >&2
+						exit 1
+					fi
+
+					pid_alive=0
+					for observed_pid in "\${previous_service_pid}" \
+						"\${observed_before_status}" "\${observed_after_status}"; do
+						if [ -n "\${observed_pid}" ] && \
+							kill -0 "\${observed_pid}" 2>/dev/null; then
+							pid_alive=1
+						fi
+					done
+
+					terminal_status=0
 					if [ "\${service_status}" = \
 						'fail: termux-stacksd: runsv not running' ]; then
-						stop_proven=1
+						terminal_status=1
 					else
 						main_status=\${service_status%%; *}
 						case "\${main_status}" in
@@ -85,22 +119,45 @@ termux_step_create_debscripts() {
 								elapsed=\${elapsed%s}
 								case "\${elapsed}" in
 									'' | *[!0-9]*) ;;
-									*) stop_proven=1 ;;
+									*) terminal_status=1 ;;
 								esac
 								;;
 						esac
 					fi
-					if [ "\${stop_proven}" -ne 1 ]; then
-						printf '%s\n' \
-							'termux-stacks: service stop could not be proven; removal aborted' >&2
-						exit 1
+
+					if [ "\${terminal_status}" -eq 1 ] && [ "\${pid_alive}" -eq 0 ]; then
+						read_service_pid
+						observed_final_pid=\${service_pid}
+						if [ -n "\${observed_final_pid}" ] && \
+							[ "\${observed_final_pid}" != "\${previous_service_pid}" ]; then
+							printf '%s\n' \
+								'termux-stacks: supervised daemon PID changed after terminal status; removal aborted' >&2
+							exit 1
+						fi
+						pid_alive=0
+						for observed_pid in "\${previous_service_pid}" \
+							"\${observed_before_status}" "\${observed_after_status}" \
+							"\${observed_final_pid}"; do
+							if [ -n "\${observed_pid}" ] && \
+								kill -0 "\${observed_pid}" 2>/dev/null; then
+								pid_alive=1
+							fi
+						done
+						if [ "\${pid_alive}" -eq 0 ]; then
+							stop_proven=1
+							break
+						fi
 					fi
-					read_service_pid
-					if [ -n "\${service_pid}" ] && kill -0 "\${service_pid}" 2>/dev/null; then
-						printf '%s\n' \
-							'termux-stacks: supervised daemon restarted; removal aborted' >&2
-						exit 1
+
+					if [ "\${status_attempt}" -lt "\${status_attempt_limit}" ]; then
+						"${TERMUX_PREFIX}/bin/sleep" 1 || exit 1
 					fi
+				done
+
+				if [ "\${stop_proven}" -ne 1 ]; then
+					printf 'termux-stacks: service stop could not be proven after %s status attempts; removal aborted\n' \
+						"\${status_attempt_limit}" >&2
+					exit 1
 				fi
 			fi
 		fi

@@ -9,7 +9,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEVICE_PHASE=G3
 DEVICE_RUN_LABEL=termux-stacks-g3
 DEVICE_RUNTIME_LABEL=txs-g3
-DEVICE_HARNESS_VERSION=4
+DEVICE_HARNESS_VERSION=5
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised only the two explicitly supplied local termux-stacks\npackages and the fixed termux-stacksd service. It required an absent package,\nservice and runtime plus an absent or empty state baseline, used one owned\nmarker, and restored that exact baseline. Only after both ordinary-removal and\nreinstall proofs did it purge that exact package to clear Debian conffiles. It\nnever removed unknown state or targeted an unqualified process.'
 
 # shellcheck source=tests/device/lib.sh
@@ -734,13 +734,21 @@ g3_static_package() {
 		grep -Fq "$G3_PREFIX/bin/sv\" -w 20 down termux-stacksd" \
 			"$control/prerm" || package_ok=0
 		grep -Fq 'stop_rc=$?' "$control/prerm" || package_ok=0
+		grep -Fq 'stop_output=$(SVDIR=' "$control/prerm" || package_ok=0
 		grep -Fq "'fail: termux-stacksd: runsv not running'" \
 			"$control/prerm" || package_ok=0
 		grep -Fq 'elapsed=${elapsed%s}' "$control/prerm" || package_ok=0
 		grep -Fq 'stop_proven=1' "$control/prerm" || package_ok=0
+		grep -Fq 'status_attempt_limit=5' "$control/prerm" || package_ok=0
+		grep -Fq 'sv status attempt %s/%s rc=%s: %s' "$control/prerm" || package_ok=0
 		grep -Fq 'previous_service_pid=${service_pid}' "$control/prerm" || package_ok=0
+		grep -Fq 'observed_before_status=${service_pid}' "$control/prerm" || package_ok=0
+		grep -Fq 'observed_after_status=${service_pid}' "$control/prerm" || package_ok=0
+		grep -Fq 'observed_final_pid=${service_pid}' "$control/prerm" || package_ok=0
 		grep -Fq 'kill -0 "${observed_pid}"' "$control/prerm" || package_ok=0
 		grep -Fq "$G3_PREFIX/bin/touch\" \"\${down_file}\" || exit 1" \
+			"$control/prerm" || package_ok=0
+		grep -Fq "$G3_PREFIX/bin/sleep\" 1 || exit 1" \
 			"$control/prerm" || package_ok=0
 		grep -Fq "$G3_PREFIX/var/service/termux-stacksd" "$control/prerm" || package_ok=0
 		if grep -Eq '(^|[[:space:]])rm[[:space:]]' "$control/prerm"; then package_ok=0; fi

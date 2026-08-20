@@ -12,9 +12,13 @@ engine dependency is pinned to `proot-distro 5.6.0` because the runtime
 capability probe accepts exactly that qualified version.
 
 The fixture's `prerm` acts only on an actual package removal. It creates the
-fixed service's `down` file, records the supervised PID on both sides of an
-absolute, bounded `sv down`, and requires either a successful stop or an
-explicitly down/inactive supervisor. On Debian, removal therefore aborts
+fixed service's `down` file, records the supervised PID around an absolute,
+bounded `sv down`, and then performs up to five bounded status observations.
+It does not trust the stop command's exit code by itself. A removal can
+proceed only after an exact terminal `down` or inactive-supervisor status and
+a final recheck prove every recorded PID dead. Transient status-command
+failures are retried, while the stop result and every status result remain in
+the package manager log for diagnosis. On Debian, removal therefore aborts
 instead of deleting the executable underneath a service that cannot be proven
 stopped. The hook retains the Termux-managed service conffiles, so `down`
 prevents runit from retrying a removed binary while an ordinary reinstall can
