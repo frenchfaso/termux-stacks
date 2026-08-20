@@ -188,6 +188,38 @@ fn daemon_exits_cleanly_on_sigterm() {
     assert!(!socket.exists(), "graceful shutdown must remove the socket");
 }
 
+#[test]
+fn daemon_handles_shutdown_signals_after_binding_but_before_runtime_initialization() {
+    for (label, signal) in [("sigterm", libc::SIGTERM), ("sigint", libc::SIGINT)] {
+        let prefix = TestPrefix::new(&format!("startup-{label}"));
+        let pause_dir = prefix.path().join("startup-pause");
+        fs::create_dir(&pause_dir).expect("create startup pause directory");
+        fs::set_permissions(&pause_dir, fs::Permissions::from_mode(0o700))
+            .expect("make startup pause directory private");
+        let socket = prefix.path().join("var/run/termux-stacks/daemon.sock");
+        let database = prefix.path().join("var/lib/termux-stacks/state.db");
+        let reached = pause_dir.join("after-socket-bind.reached");
+        let mut daemon =
+            DaemonProcess::spawn_paused_after_bind(prefix.path(), "daemon", &pause_dir);
+
+        wait_until_path_exists(&mut daemon, &reached);
+        let metadata = fs::symlink_metadata(&socket).expect("startup checkpoint must follow bind");
+        assert!(metadata.file_type().is_socket());
+
+        let status = daemon.signal_and_wait(signal);
+        assert!(
+            status.success(),
+            "{label}: {status:?}; {}",
+            daemon.diagnostics()
+        );
+        assert!(!socket.exists(), "{label}: startup shutdown left a socket");
+        assert!(
+            !database.exists(),
+            "{label}: startup shutdown initialized durable state"
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn vertical_lifecycle_uses_the_fake_engine_contract() {
@@ -1902,6 +1934,30 @@ fn wait_until_exit(process: &mut DaemonProcess) -> ExitStatus {
     }
 }
 
+fn wait_until_path_exists(process: &mut DaemonProcess, path: &Path) {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        if path.is_file() {
+            return;
+        }
+        if let Some(status) = process.try_wait() {
+            panic!(
+                "daemon exited before creating {}: {status}; {}",
+                path.display(),
+                process.diagnostics()
+            );
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "daemon did not create {} within {READY_TIMEOUT:?}; {}",
+                path.display(),
+                process.diagnostics()
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
 struct DaemonProcess {
     child: Option<Child>,
     stdout: PathBuf,
@@ -1910,17 +1966,21 @@ struct DaemonProcess {
 
 impl DaemonProcess {
     fn spawn(prefix: &Path, label: &str) -> Self {
-        Self::spawn_configured(prefix, label, None, false)
+        Self::spawn_configured(prefix, label, None, false, None)
+    }
+
+    fn spawn_paused_after_bind(prefix: &Path, label: &str, pause_dir: &Path) -> Self {
+        Self::spawn_configured(prefix, label, None, false, Some(pause_dir))
     }
 
     #[cfg(target_os = "linux")]
     fn spawn_with_fault(prefix: &Path, label: &str, fault_dir: Option<&Path>) -> Self {
-        Self::spawn_configured(prefix, label, fault_dir, false)
+        Self::spawn_configured(prefix, label, fault_dir, false, None)
     }
 
     #[cfg(target_os = "linux")]
     fn spawn_with_immediate_restart(prefix: &Path, label: &str) -> Self {
-        Self::spawn_configured(prefix, label, None, true)
+        Self::spawn_configured(prefix, label, None, true, None)
     }
 
     fn spawn_configured(
@@ -1928,6 +1988,7 @@ impl DaemonProcess {
         label: &str,
         fault_dir: Option<&Path>,
         immediate_restart: bool,
+        startup_pause_dir: Option<&Path>,
     ) -> Self {
         let fake_bin = prefix.join("bin");
         fs::create_dir_all(&fake_bin).expect("create fake engine bin directory");
@@ -2108,6 +2169,12 @@ esac
         if immediate_restart {
             command.env("TERMUX_STACKS_TEST_IMMEDIATE_RESTART", "1");
         }
+        if let Some(startup_pause_dir) = startup_pause_dir {
+            command.env(
+                "TERMUX_STACKS_TEST_DAEMON_STARTUP_PAUSE_DIR",
+                startup_pause_dir,
+            );
+        }
         let child = command.spawn().expect("spawn daemon");
 
         Self {
@@ -2136,6 +2203,10 @@ esac
     }
 
     fn terminate_and_wait(&mut self) -> ExitStatus {
+        self.signal_and_wait(libc::SIGTERM)
+    }
+
+    fn signal_and_wait(&mut self, signal: i32) -> ExitStatus {
         let pid = self
             .child
             .as_ref()
@@ -2143,8 +2214,8 @@ esac
             .id();
         // SAFETY: the child PID belongs to this test process and remains owned
         // until wait_until_exit reaps it.
-        let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-        assert_eq!(result, 0, "send SIGTERM to daemon");
+        let result = unsafe { libc::kill(pid as i32, signal) };
+        assert_eq!(result, 0, "send signal {signal} to daemon");
         wait_until_exit(self)
     }
 

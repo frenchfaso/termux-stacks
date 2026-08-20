@@ -9,7 +9,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEVICE_PHASE=G3
 DEVICE_RUN_LABEL=termux-stacks-g3
 DEVICE_RUNTIME_LABEL=txs-g3
-DEVICE_HARNESS_VERSION=2
+DEVICE_HARNESS_VERSION=3
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised only the two explicitly supplied local termux-stacks\npackages and the fixed termux-stacksd service. It required an absent package,\nservice and runtime plus an absent or empty state baseline, used one owned\nmarker, and restored that exact baseline. Only after both ordinary-removal and\nreinstall proofs did it purge that exact package to clear Debian conffiles. It\nnever removed unknown state or targeted an unqualified process.'
 
 # shellcheck source=tests/device/lib.sh
@@ -171,6 +171,18 @@ G3_LIVE_PID=
 G3_LIVE_STARTTIME=
 G3_LIVE_BOOT_ID=
 G3_LIVE_EXE_ID=
+G3_RUNSV_PID=
+G3_RUNSV_STARTTIME=
+G3_RUNSV_BOOT_ID=
+G3_RUNSV_EXE_ID=
+G3_RUNSV_BINARY_ID=
+G3_SVLOGD_PID=
+G3_SVLOGD_STARTTIME=
+G3_SVLOGD_BOOT_ID=
+G3_SVLOGD_EXE_ID=
+G3_SVLOGD_BINARY_ID=
+G3_SERVICE_DIR_ID=
+G3_SERVICE_LOG_DIR_ID=
 G3_LAST_INSTALLATION_ID=
 G3_DISABLED_INSTALLATION_ID=
 G3_LIVE_INSTALLATION_ID=
@@ -274,8 +286,9 @@ g3_service_pid() {
 }
 
 g3_wait_recorded_process_gone() {
-	local pid=$1 starttime=$2 boot_id=$3 iteration current_boot current_start
-	for ((iteration = 0; iteration < 100; iteration += 1)); do
+	local pid=$1 starttime=$2 boot_id=$3 max_iterations=${4:-100}
+	local iteration current_boot current_start
+	for ((iteration = 0; iteration < max_iterations; iteration += 1)); do
 		current_boot=$(< /proc/sys/kernel/random/boot_id) || return 1
 		[[ $current_boot == "$boot_id" ]] || return 0
 		current_start=$(g3_proc_starttime "$pid" 2>/dev/null) || return 0
@@ -286,16 +299,37 @@ g3_wait_recorded_process_gone() {
 }
 
 g3_wait_for_live_service() {
-	local label=$1 pid= iteration
+	local label=$1 pid= observed_pid iteration
+	local boot_id starttime exe_id observed_boot observed_start observed_exe
 	local status_file=$G3_PACKAGES_DIR/$label.service-status
 	for ((iteration = 0; iteration < 100; iteration += 1)); do
 		pid=$(g3_service_pid "$status_file")
 		if [[ $pid =~ ^[1-9][0-9]*$ && -S $G3_SOCKET ]] && \
 			g3_proc_is_daemon "$pid"; then
+			boot_id=$(< /proc/sys/kernel/random/boot_id) || return 1
+			starttime=$(g3_proc_starttime "$pid") || return 1
+			exe_id=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null) || return 1
+			# The blessed old package binds before registering signal handlers. A
+			# successful protocol round trip proves that either daemon has entered
+			# its serve loop before a later sv-disable sends TERM.
+			device_capture_timed 5 "$label.ready-probe" \
+				"$G3_BINARY" status g3-package-probe
+			if ((DEVICE_CAPTURE_RC != 0)) || \
+				! grep -Eq '"observed_state"[[:space:]]*:[[:space:]]*"absent"' \
+					"$DEVICE_CAPTURE_STDOUT"; then
+				return 1
+			fi
+			observed_pid=$(g3_service_pid "$status_file")
+			observed_boot=$(< /proc/sys/kernel/random/boot_id) || return 1
+			observed_start=$(g3_proc_starttime "$pid") || return 1
+			observed_exe=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null) || return 1
+			[[ $observed_pid == "$pid" && $observed_boot == "$boot_id" && \
+				$observed_start == "$starttime" && $observed_exe == "$exe_id" ]] && \
+				g3_proc_is_daemon "$pid" || return 1
 			G3_LIVE_PID=$pid
-			G3_LIVE_STARTTIME=$(g3_proc_starttime "$pid") || return 1
-			G3_LIVE_BOOT_ID=$(< /proc/sys/kernel/random/boot_id) || return 1
-			G3_LIVE_EXE_ID=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null) || return 1
+			G3_LIVE_STARTTIME=$starttime
+			G3_LIVE_BOOT_ID=$boot_id
+			G3_LIVE_EXE_ID=$exe_id
 			return 0
 		fi
 		sleep 0.1
@@ -325,6 +359,129 @@ g3_daemon_pids() {
 		pid=${pid%/cmdline}
 		if g3_proc_is_daemon "$pid"; then printf '%s\n' "$pid"; fi
 	done
+}
+
+g3_proc_ppid() {
+	local pid=$1 ppid
+	ppid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$pid/status" 2>/dev/null) || return 1
+	[[ $ppid =~ ^[1-9][0-9]*$ ]] || return 1
+	printf '%s\n' "$ppid"
+}
+
+g3_proc_is_service_supervisor() {
+	local pid=$1 observed_exe observed_cwd
+	local -a argv=()
+	[[ -n $G3_RUNSV_BINARY_ID && -n $G3_SERVICE_DIR_ID ]] || return 1
+	[[ -r /proc/$pid/cmdline ]] || return 1
+	mapfile -d '' -t argv <"/proc/$pid/cmdline" || return 1
+	((${#argv[@]} == 2)) || return 1
+	[[ ${argv[0]} == runsv && ${argv[1]} == termux-stacksd ]] || return 1
+	observed_exe=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null) || return 1
+	observed_cwd=$(stat -Lc '%d:%i' "/proc/$pid/cwd" 2>/dev/null) || return 1
+	[[ $observed_exe == "$G3_RUNSV_BINARY_ID" && \
+		$observed_cwd == "$G3_SERVICE_DIR_ID" ]]
+}
+
+g3_proc_is_service_logger() {
+	local pid=$1 observed_exe observed_cwd
+	local -a argv=()
+	[[ -n $G3_SVLOGD_BINARY_ID && -n $G3_SERVICE_LOG_DIR_ID ]] || return 1
+	[[ -r /proc/$pid/cmdline ]] || return 1
+	mapfile -d '' -t argv <"/proc/$pid/cmdline" || return 1
+	((${#argv[@]} == 3)) || return 1
+	[[ ${argv[0]} == svlogd && ${argv[1]} == -tt && \
+		${argv[2]} == "$G3_PREFIX/var/log/sv/termux-stacksd" ]] || return 1
+	observed_exe=$(stat -Lc '%d:%i' "/proc/$pid/exe" 2>/dev/null) || return 1
+	observed_cwd=$(stat -Lc '%d:%i' "/proc/$pid/cwd" 2>/dev/null) || return 1
+	[[ $observed_exe == "$G3_SVLOGD_BINARY_ID" && \
+		$observed_cwd == "$G3_SERVICE_LOG_DIR_ID" ]]
+}
+
+g3_service_process_pids() {
+	local role=$1 proc_cmd pid
+	[[ $role == runsv || $role == svlogd ]] || return 2
+	for proc_cmd in /proc/[1-9]*/cmdline; do
+		pid=${proc_cmd#/proc/}
+		pid=${pid%/cmdline}
+		case $role in
+			runsv)
+				if g3_proc_is_service_supervisor "$pid"; then printf '%s\n' "$pid"; fi
+				;;
+			svlogd)
+				if g3_proc_is_service_logger "$pid"; then printf '%s\n' "$pid"; fi
+				;;
+		esac
+	done
+}
+
+g3_capture_service_processes() {
+	local boot_id runsv_pids logger_pids logger_ppid
+	local runsv_start_after logger_start_after runsv_exe_after logger_exe_after
+	local logger_ppid_after
+	local report=$G3_PACKAGES_DIR/cleanup-service-identities.tsv
+	[[ -x $G3_PREFIX/bin/runsv && ! -L $G3_PREFIX/bin/runsv && \
+		-x $G3_PREFIX/bin/svlogd && ! -L $G3_PREFIX/bin/svlogd ]] || return 1
+	[[ -d $G3_SERVICE_DIR && ! -L $G3_SERVICE_DIR && \
+		-d $G3_SERVICE_DIR/log && ! -L $G3_SERVICE_DIR/log ]] || return 1
+	G3_RUNSV_BINARY_ID=$(stat -Lc '%d:%i' "$G3_PREFIX/bin/runsv") || return 1
+	G3_SVLOGD_BINARY_ID=$(stat -Lc '%d:%i' "$G3_PREFIX/bin/svlogd") || return 1
+	G3_SERVICE_DIR_ID=$(stat -Lc '%d:%i' "$G3_SERVICE_DIR") || return 1
+	G3_SERVICE_LOG_DIR_ID=$(stat -Lc '%d:%i' "$G3_SERVICE_DIR/log") || return 1
+	runsv_pids=$(g3_service_process_pids runsv) || return 1
+	logger_pids=$(g3_service_process_pids svlogd) || return 1
+	[[ $runsv_pids =~ ^[1-9][0-9]*$ && $logger_pids =~ ^[1-9][0-9]*$ ]] || return 1
+	boot_id=$(< /proc/sys/kernel/random/boot_id) || return 1
+	G3_RUNSV_PID=$runsv_pids
+	G3_RUNSV_STARTTIME=$(g3_proc_starttime "$G3_RUNSV_PID") || return 1
+	G3_RUNSV_BOOT_ID=$boot_id
+	G3_RUNSV_EXE_ID=$(stat -Lc '%d:%i' "/proc/$G3_RUNSV_PID/exe" 2>/dev/null) || return 1
+	G3_SVLOGD_PID=$logger_pids
+	G3_SVLOGD_STARTTIME=$(g3_proc_starttime "$G3_SVLOGD_PID") || return 1
+	G3_SVLOGD_BOOT_ID=$boot_id
+	G3_SVLOGD_EXE_ID=$(stat -Lc '%d:%i' "/proc/$G3_SVLOGD_PID/exe" 2>/dev/null) || return 1
+	g3_proc_is_service_supervisor "$G3_RUNSV_PID" || return 1
+	g3_proc_is_service_logger "$G3_SVLOGD_PID" || return 1
+	logger_ppid=$(g3_proc_ppid "$G3_SVLOGD_PID") || return 1
+	[[ $logger_ppid == "$G3_RUNSV_PID" ]] || return 1
+	runsv_start_after=$(g3_proc_starttime "$G3_RUNSV_PID") || return 1
+	logger_start_after=$(g3_proc_starttime "$G3_SVLOGD_PID") || return 1
+	runsv_exe_after=$(stat -Lc '%d:%i' "/proc/$G3_RUNSV_PID/exe" 2>/dev/null) || return 1
+	logger_exe_after=$(stat -Lc '%d:%i' "/proc/$G3_SVLOGD_PID/exe" 2>/dev/null) || return 1
+	logger_ppid_after=$(g3_proc_ppid "$G3_SVLOGD_PID") || return 1
+	[[ $runsv_start_after == "$G3_RUNSV_STARTTIME" && \
+		$logger_start_after == "$G3_SVLOGD_STARTTIME" && \
+		$runsv_exe_after == "$G3_RUNSV_EXE_ID" && \
+		$logger_exe_after == "$G3_SVLOGD_EXE_ID" && \
+		$logger_ppid_after == "$G3_RUNSV_PID" ]] || return 1
+	g3_proc_is_service_supervisor "$G3_RUNSV_PID" || return 1
+	g3_proc_is_service_logger "$G3_SVLOGD_PID" || return 1
+	printf 'role\tpid\tppid\tstarttime\tboot_id\texecutable_dev_inode\tcwd_dev_inode\n' \
+		>"$report"
+	printf 'runsv\t%s\t-\t%s\t%s\t%s\t%s\n' "$G3_RUNSV_PID" \
+		"$G3_RUNSV_STARTTIME" "$G3_RUNSV_BOOT_ID" "$G3_RUNSV_EXE_ID" \
+		"$G3_SERVICE_DIR_ID" >>"$report"
+	printf 'svlogd\t%s\t%s\t%s\t%s\t%s\t%s\n' "$G3_SVLOGD_PID" \
+		"$logger_ppid" "$G3_SVLOGD_STARTTIME" "$G3_SVLOGD_BOOT_ID" \
+		"$G3_SVLOGD_EXE_ID" "$G3_SERVICE_LOG_DIR_ID" >>"$report"
+	sync -f "$report"
+}
+
+g3_wait_service_processes_gone() {
+	local runsv_after logger_after
+	local report=$G3_PACKAGES_DIR/cleanup-service-drain.tsv
+	g3_wait_recorded_process_gone "$G3_RUNSV_PID" "$G3_RUNSV_STARTTIME" \
+		"$G3_RUNSV_BOOT_ID" 150 || return 1
+	g3_wait_recorded_process_gone "$G3_SVLOGD_PID" "$G3_SVLOGD_STARTTIME" \
+		"$G3_SVLOGD_BOOT_ID" 150 || return 1
+	runsv_after=$(g3_service_process_pids runsv) || return 1
+	logger_after=$(g3_service_process_pids svlogd) || return 1
+	printf 'role\tstate\tpids\n' >"$report"
+	printf 'runsv\t%s\t%s\n' "$(if [[ -z $runsv_after ]]; then printf none; else printf present; fi)" \
+		"${runsv_after:--}" >>"$report"
+	printf 'svlogd\t%s\t%s\n' "$(if [[ -z $logger_after ]]; then printf none; else printf present; fi)" \
+		"${logger_after:--}" >>"$report"
+	sync -f "$report" || return 1
+	[[ -z $runsv_after && -z $logger_after ]]
 }
 
 g3_assert_marker() {
@@ -633,7 +790,7 @@ g3_static_package() {
 	printf '%s\n' "$runpath" >"$report.runpath"
 	if grep -Eq '\.debug_(info|line|str|abbrev)' "$report.elf-sections"; then package_ok=0; fi
 	if grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$report.elf-sections"; then package_ok=0; fi
-	if grep -Eq 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART)' \
+	if grep -Eq 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART|TEST_DAEMON_STARTUP_PAUSE_DIR)' \
 		"$report.elf-strings"; then
 		package_ok=0
 	fi
@@ -693,16 +850,18 @@ g3_assert_installed() {
 g3_assert_disabled() {
 	local label=$1
 	local status_file=$G3_PACKAGES_DIR/$label.service-status
-	local pid pids iteration
+	local pid pids iteration terminal=0
 	[[ -f $G3_SERVICE_DIR/down && ! -L $G3_SERVICE_DIR/down ]] || return 1
-	[[ ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] || return 1
-	for ((iteration = 0; iteration < 50; iteration += 1)); do
+	for ((iteration = 0; iteration < 150; iteration += 1)); do
 		pid=$(g3_service_pid "$status_file")
-		if [[ -z $pid ]] && grep -q '^down: termux-stacksd:' "$status_file"; then break; fi
+		if [[ -z $pid && ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] && \
+			grep -q '^down: termux-stacksd:' "$status_file"; then
+			terminal=1
+			break
+		fi
 		sleep 0.1
 	done
-	[[ -z $pid ]] || return 1
-	grep -q '^down: termux-stacksd:' "$status_file" || return 1
+	((terminal == 1)) || return 1
 	pids=$(g3_pids_for_installed_binary || :)
 	[[ -z $pids ]]
 }
@@ -1014,7 +1173,13 @@ g3_cleanup() {
 		! g3_capture_state before-final-purge; then
 		cleanup_rc=1
 		paths_safe=0
+	elif ! g3_capture_service_processes; then
+		cleanup_rc=1
+		paths_safe=0
 	elif ! g3_package_status >/dev/null 2>&1 || ! g3_cleanup_purge_package; then
+		cleanup_rc=1
+		paths_safe=0
+	elif ! g3_wait_service_processes_gone; then
 		cleanup_rc=1
 		paths_safe=0
 	elif ! g3_package_absent || [[ -e $G3_BINARY || -L $G3_BINARY || \

@@ -607,7 +607,7 @@ jobs:
           printf '%s\n' "$runpath" >"$elf_dir/runpath.txt"
           if grep -Eq '\.debug_(info|line|str|abbrev)' "$elf_dir/sections.txt"; then false; fi
           if grep -Eq '[[:space:]]\.symtab([[:space:]]|$)' "$elf_dir/sections.txt"; then false; fi
-          grep -E 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART)' \
+          grep -E 'TERMUX_STACKS_(FAULT_DIR|SQLITE_MAX_PAGES|TEST_IMMEDIATE_RESTART|TEST_DAEMON_STARTUP_PAUSE_DIR)' \
             "$elf_dir/strings.txt" >"$elf_dir/fault-hooks.txt" || true
           [[ ! -s $elf_dir/fault-hooks.txt ]]
 

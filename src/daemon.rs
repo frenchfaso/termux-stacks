@@ -26,6 +26,8 @@ pub(crate) enum Error {
     SecureSocket(io::Error),
     ConfigureSocket(io::Error),
     RegisterSignal(io::Error),
+    #[cfg(debug_assertions)]
+    StartupCheckpoint(io::Error),
     InitializeRuntime(crate::runtime::Error),
     ServeSocket(io::Error),
 }
@@ -62,6 +64,10 @@ impl fmt::Display for Error {
             Self::RegisterSignal(error) => {
                 write!(formatter, "cannot register shutdown signal: {error}")
             }
+            #[cfg(debug_assertions)]
+            Self::StartupCheckpoint(error) => {
+                write!(formatter, "daemon startup checkpoint failed: {error}")
+            }
             Self::InitializeRuntime(error) => {
                 write!(formatter, "cannot initialize runtime: {error}")
             }
@@ -77,20 +83,39 @@ pub(crate) fn run() -> Result<(), Error> {
         return Err(Error::RelativePrefix(prefix));
     }
 
-    let paths = RuntimePaths::new(prefix.clone());
-    paths.prepare().map_err(Error::PreparePaths)?;
-    let daemon_lock = DaemonLock::acquire(paths.lock_path())?;
-    let control_socket = ControlSocket::bind(paths.socket_path(), &daemon_lock)?;
-    let mut runtime = Runtime::initialize(paths).map_err(Error::InitializeRuntime)?;
-    control_socket
-        .listener
-        .set_nonblocking(true)
-        .map_err(Error::ConfigureSocket)?;
     let shutdown = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))
         .map_err(Error::RegisterSignal)?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))
         .map_err(Error::RegisterSignal)?;
+    if shutdown.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    let paths = RuntimePaths::new(prefix.clone());
+    paths.prepare().map_err(Error::PreparePaths)?;
+    if shutdown.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let daemon_lock = DaemonLock::acquire(paths.lock_path())?;
+    if shutdown.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let control_socket = ControlSocket::bind(paths.socket_path(), &daemon_lock)?;
+    control_socket
+        .listener
+        .set_nonblocking(true)
+        .map_err(Error::ConfigureSocket)?;
+    pause_after_socket_bind(&shutdown)?;
+    if shutdown.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    let mut runtime = Runtime::initialize(paths).map_err(Error::InitializeRuntime)?;
+    if shutdown.load(Ordering::Relaxed) {
+        runtime.shutdown();
+        return Ok(());
+    }
 
     println!(
         "termux-stacks {} daemon ready (installation: {}, prefix: {})",
@@ -100,6 +125,56 @@ pub(crate) fn run() -> Result<(), Error> {
     );
 
     control_socket.serve(&mut runtime, &shutdown)
+}
+
+#[cfg(debug_assertions)]
+fn pause_after_socket_bind(shutdown: &AtomicBool) -> Result<(), Error> {
+    let Some(directory) = std::env::var_os("TERMUX_STACKS_TEST_DAEMON_STARTUP_PAUSE_DIR") else {
+        return Ok(());
+    };
+    let directory = PathBuf::from(directory);
+    if !directory.is_absolute() {
+        return Err(Error::StartupCheckpoint(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_TEST_DAEMON_STARTUP_PAUSE_DIR must be absolute",
+        )));
+    }
+    let metadata = fs::symlink_metadata(&directory).map_err(Error::StartupCheckpoint)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(Error::StartupCheckpoint(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TERMUX_STACKS_TEST_DAEMON_STARTUP_PAUSE_DIR must be a private real directory",
+        )));
+    }
+
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(directory.join("after-socket-bind.reached"))
+        .map_err(Error::StartupCheckpoint)?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !shutdown.load(Ordering::Relaxed)
+        && !directory.join("after-socket-bind.continue").is_file()
+    {
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::StartupCheckpoint(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "daemon startup checkpoint timed out",
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn pause_after_socket_bind(_shutdown: &AtomicBool) -> Result<(), Error> {
+    Ok(())
 }
 
 struct DaemonLock {

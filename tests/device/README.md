@@ -569,8 +569,9 @@ The acceptance sequence is:
    ran, and `dpkg --verify` is clean;
 2. create one random, fsynced marker in the otherwise empty durable-state
    directory;
-3. explicitly start the old daemon, require a valid schema-2 database, record
-   its installation ID, then disable and stop it;
+3. explicitly start the old daemon, require a successful read-only protocol
+   round trip and a valid schema-2 database, record its installation ID, then
+   disable and stop it;
 4. upgrade old to new while disabled and prove that no daemon starts, schema 2
    and the installation ID remain unchanged, and no maintainer script performs
    the migration;
@@ -607,7 +608,9 @@ directory disappear while the database and marker remain byte-identical.
 Only then may it delete its marker, SQLite's known `state.db` files, and the
 known daemon lock/socket after the qualified daemon has drained. It uses
 `rmdir` only for a state directory created by this run and for its exact empty
-runtime directory. A pre-existing empty mode-0700 state directory is retained
+runtime directory. It records the exact package-service `runsv` and `svlogd`
+identities before purge and waits for both to disappear without targeting the
+global `runsvdir`. A pre-existing empty mode-0700 state directory is retained
 and restored empty. An unknown file, directory, symlink, process identity,
 package state, or service residue fails cleanup and is preserved for review;
 cleanup never broadens a path or process target. Before step 12, the purge and
