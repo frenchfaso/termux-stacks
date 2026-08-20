@@ -29,13 +29,79 @@ termux_step_create_debscripts() {
 	cat <<- EOF > ./prerm
 		#!${TERMUX_PREFIX}/bin/sh
 		if ${removal_guard}; then
-			if [ -x "${TERMUX_PREFIX}/bin/sv-disable" ]; then
+			service_dir="${TERMUX_PREFIX}/var/service/termux-stacksd"
+			if [ -e "\${service_dir}" ] || [ -L "\${service_dir}" ]; then
+				[ -d "\${service_dir}" ] && [ ! -L "\${service_dir}" ] || exit 1
+				down_file="\${service_dir}/down"
+				if [ -e "\${down_file}" ] || [ -L "\${down_file}" ]; then
+					[ -f "\${down_file}" ] && [ ! -L "\${down_file}" ] || exit 1
+				fi
+				[ -x "${TERMUX_PREFIX}/bin/touch" ] || exit 1
+				umask 077
+				"${TERMUX_PREFIX}/bin/touch" "\${down_file}" || exit 1
+				[ -x "${TERMUX_PREFIX}/bin/sv" ] || exit 1
+				pid_file="\${service_dir}/supervise/pid"
+				read_service_pid() {
+					service_pid=
+					if [ -e "\${pid_file}" ] || [ -L "\${pid_file}" ]; then
+						[ -f "\${pid_file}" ] && [ ! -L "\${pid_file}" ] || exit 1
+						if [ -s "\${pid_file}" ]; then
+							IFS= read -r service_pid < "\${pid_file}" || exit 1
+						fi
+						case "\${service_pid}" in
+							'') ;;
+							*[!0-9]* | 0*) exit 1 ;;
+						esac
+					fi
+				}
+				read_service_pid
+				previous_service_pid=\${service_pid}
+
+				stop_rc=0
 				SVDIR="${TERMUX_PREFIX}/var/service" \
-					"${TERMUX_PREFIX}/bin/sv-disable" termux-stacksd >/dev/null 2>&1 || :
-			elif [ -x "${TERMUX_PREFIX}/bin/sv" ]; then
-				touch "${TERMUX_PREFIX}/var/service/termux-stacksd/down" 2>/dev/null || :
-				SVDIR="${TERMUX_PREFIX}/var/service" \
-					"${TERMUX_PREFIX}/bin/sv" down termux-stacksd >/dev/null 2>&1 || :
+					"${TERMUX_PREFIX}/bin/sv" -w 20 down termux-stacksd \
+					>/dev/null 2>&1 || stop_rc=\$?
+
+				read_service_pid
+				for observed_pid in "\${previous_service_pid}" "\${service_pid}"; do
+					if [ -n "\${observed_pid}" ] && kill -0 "\${observed_pid}" 2>/dev/null; then
+						printf '%s\n' \
+							'termux-stacks: supervised daemon did not stop; removal aborted' >&2
+						exit 1
+					fi
+				done
+				if [ "\${stop_rc}" -ne 0 ]; then
+					service_status=\$(SVDIR="${TERMUX_PREFIX}/var/service" \
+						"${TERMUX_PREFIX}/bin/sv" status termux-stacksd 2>&1 || :)
+					stop_proven=0
+					if [ "\${service_status}" = \
+						'fail: termux-stacksd: runsv not running' ]; then
+						stop_proven=1
+					else
+						main_status=\${service_status%%; *}
+						case "\${main_status}" in
+							'down: termux-stacksd: '*'s')
+								elapsed=\${main_status#down: termux-stacksd: }
+								elapsed=\${elapsed%s}
+								case "\${elapsed}" in
+									'' | *[!0-9]*) ;;
+									*) stop_proven=1 ;;
+								esac
+								;;
+						esac
+					fi
+					if [ "\${stop_proven}" -ne 1 ]; then
+						printf '%s\n' \
+							'termux-stacks: service stop could not be proven; removal aborted' >&2
+						exit 1
+					fi
+					read_service_pid
+					if [ -n "\${service_pid}" ] && kill -0 "\${service_pid}" 2>/dev/null; then
+						printf '%s\n' \
+							'termux-stacks: supervised daemon restarted; removal aborted' >&2
+						exit 1
+					fi
+				fi
 			fi
 		fi
 	EOF

@@ -160,16 +160,20 @@ incomplete state to `unknown`. The package upgrade matrix must exercise this
 migration with both disabled and running daemon scenarios; package maintainer
 scripts do not run it.
 
-Removal is distinct from upgrade. A future `prerm` must, only during actual
-removal:
+Removal is distinct from upgrade. The package-candidate `prerm`, only during
+actual removal:
 
-1. run best-effort `sv-disable termux-stacksd`/`sv down`;
-2. prevent runit from retrying an executable that has been removed;
-3. not delete the database, volumes, logs, or rootfs.
+1. creates the fixed `down` file and requests a bounded, exact `sv down`;
+2. on Debian, aborts removal unless the supervised daemon is proven stopped;
+3. prevents runit from retrying an executable that has been removed;
+4. does not delete the database, volumes, logs, or rootfs.
 
-The precise Debian/pacman semantics must be implemented and tested in the
-fixture, including enabled service, disabled service, and upgrade, before the
-package gate.
+The G3 package-candidate gate qualifies the Debian lifecycle, including an
+enabled service, a disabled service, and upgrade. Pacman/libalpm executes the
+converted `pre_remove` hook but does not abort removal when that hook exits
+nonzero, so it cannot inherit Debian's fail-closed removal guarantee. The
+fixture must retain a bounded best-effort Pacman stop without deleting state,
+but Pacman lifecycle qualification remains an explicit blocker for G4.
 
 ## 7. CI and device tests
 

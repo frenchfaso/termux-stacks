@@ -11,19 +11,27 @@ SQLite strategy is dynamic linking against the packaged `libsqlite`. The
 engine dependency is pinned to `proot-distro 5.6.0` because the runtime
 capability probe accepts exactly that qualified version.
 
-The fixture's `prerm` acts only on an actual package removal. It disables and
-stops the fixed `termux-stacksd` runit service but retains the Termux-managed
-service conffiles. The `down` file therefore prevents runit from retrying a
-removed binary, while an ordinary reinstall can restore the service without
-`--force-confmiss`. It deliberately does nothing during an upgrade, so an
-upgrade neither restarts the daemon nor changes runtime state. A guarded
-Debian `postrm purge` removes only the fixed service directory. Pacman has no
-purge-only hook, so its generated `post_remove` deliberately leaves any runit
-residue and `.pacsave` files intact. The state database, logs, volumes and
+The fixture's `prerm` acts only on an actual package removal. It creates the
+fixed service's `down` file, records the supervised PID on both sides of an
+absolute, bounded `sv down`, and requires either a successful stop or an
+explicitly down/inactive supervisor. On Debian, removal therefore aborts
+instead of deleting the executable underneath a service that cannot be proven
+stopped. The hook retains the Termux-managed service conffiles, so `down`
+prevents runit from retrying a removed binary while an ordinary reinstall can
+restore the service without `--force-confmiss`. It deliberately does nothing
+during an upgrade, so an upgrade neither restarts the daemon nor changes
+runtime state.
+
+A guarded Debian `postrm purge` removes only the fixed service directory.
+Pacman has no purge-only hook, so its generated `post_remove` deliberately
+leaves any runit residue and `.pacsave` files intact. Pacman/libalpm also does
+not abort a removal transaction when `pre_remove` exits nonzero. Its converted
+hook still requests the same bounded stop, but cannot provide Debian's
+fail-closed guarantee; the v0.1 G3 lifecycle gate is Debian-only and Pacman
+qualification remains a blocker for G4. The state database, logs, volumes and
 PRoot root filesystems are never package-owned removal or purge targets. For
-Debian output the generated guards distinguish `remove` and `purge`. For
-Pacman output the Termux builder maps the disabling script to `pre_remove`;
-neither generated body can run during an upgrade.
+Debian output the generated guards distinguish `remove` and `purge`; neither
+generated removal body can run during an upgrade.
 
 ## G3 canonical build
 

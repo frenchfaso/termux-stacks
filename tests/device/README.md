@@ -630,4 +630,7 @@ artifact ledger.
 This one-device run qualifies Debian package lifecycle and runit behavior for
 aarch64 only. The clean, pinned `termux-packages` builds for
 `aarch64`, `arm`, `i686`, and `x86_64`, their artifact hashes and sizes, and
-the immutable release archive remain separate G3 evidence.
+the immutable release archive remain separate G3 evidence. It does not
+qualify Pacman removal: libalpm continues the transaction after a failing
+`pre_remove` scriptlet, so Pacman cannot provide the Debian hook's fail-closed
+stop guarantee and remains a G4 blocker.

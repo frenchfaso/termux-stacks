@@ -731,8 +731,17 @@ g3_static_package() {
 		[[ $(head -n 1 "$control/prerm") == "#!$G3_PREFIX/bin/sh" ]] || package_ok=0
 		"$G3_PREFIX/bin/sh" -n "$control/prerm" || package_ok=0
 		grep -Fq '[ "${1:-}" = remove ]' "$control/prerm" || package_ok=0
-		grep -Fq "$G3_PREFIX/bin/sv-disable" "$control/prerm" || package_ok=0
-		grep -Fq "$G3_PREFIX/bin/sv\" down termux-stacksd" "$control/prerm" || package_ok=0
+		grep -Fq "$G3_PREFIX/bin/sv\" -w 20 down termux-stacksd" \
+			"$control/prerm" || package_ok=0
+		grep -Fq 'stop_rc=$?' "$control/prerm" || package_ok=0
+		grep -Fq "'fail: termux-stacksd: runsv not running'" \
+			"$control/prerm" || package_ok=0
+		grep -Fq 'elapsed=${elapsed%s}' "$control/prerm" || package_ok=0
+		grep -Fq 'stop_proven=1' "$control/prerm" || package_ok=0
+		grep -Fq 'previous_service_pid=${service_pid}' "$control/prerm" || package_ok=0
+		grep -Fq 'kill -0 "${observed_pid}"' "$control/prerm" || package_ok=0
+		grep -Fq "$G3_PREFIX/bin/touch\" \"\${down_file}\" || exit 1" \
+			"$control/prerm" || package_ok=0
 		grep -Fq "$G3_PREFIX/var/service/termux-stacksd" "$control/prerm" || package_ok=0
 		if grep -Eq '(^|[[:space:]])rm[[:space:]]' "$control/prerm"; then package_ok=0; fi
 		if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
@@ -866,16 +875,14 @@ g3_assert_disabled() {
 	[[ -z $pids ]]
 }
 
-g3_assert_removed_config() {
-	local label=$1 expected_version=$2
+g3_assert_removed_config_structure() {
+	local expected_version=$1
 	g3_package_config_files "$expected_version" || return 1
 	[[ ! -e $G3_BINARY && ! -L $G3_BINARY ]] || return 1
 	[[ -d $G3_SERVICE_DIR && ! -L $G3_SERVICE_DIR ]] || return 1
 	[[ -f $G3_SERVICE_DIR/run && -x $G3_SERVICE_DIR/run && ! -L $G3_SERVICE_DIR/run ]] || return 1
 	[[ -f $G3_SERVICE_DIR/log/run && -x $G3_SERVICE_DIR/log/run && \
-		! -L $G3_SERVICE_DIR/log/run ]] || return 1
-	g3_assert_disabled "$label" || return 1
-	[[ -z $(g3_daemon_pids) ]]
+		! -L $G3_SERVICE_DIR/log/run ]]
 }
 
 g3_enable_service() {
@@ -1022,17 +1029,27 @@ g3_remove() {
 	g3_assert_only_target_package_changed "$label.before" "$label.after" || return 1
 	g3_abort_if_signalled
 	((effect_rc == 0)) || return 1
-	g3_assert_removed_config "$label" "$version"
+	g3_assert_removed_config_structure "$version"
 }
 
 g3_stop_owned_daemon() {
-	local iteration
+	local iteration current_boot current_start
 	[[ -n $G3_LIVE_PID ]] || return 0
 	if ! g3_proc_starttime "$G3_LIVE_PID" >/dev/null 2>&1; then
 		G3_LIVE_PID=
 		return 0
 	fi
 	if ! g3_live_identity_matches; then
+		current_boot=$(< /proc/sys/kernel/random/boot_id) || return 1
+		current_start=$(g3_proc_starttime "$G3_LIVE_PID" 2>/dev/null) || {
+			G3_LIVE_PID=
+			return 0
+		}
+		if [[ $current_boot != "$G3_LIVE_BOOT_ID" || \
+			$current_start != "$G3_LIVE_STARTTIME" ]]; then
+			G3_LIVE_PID=
+			return 0
+		fi
 		printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 			stop-owned-daemon identity-ambiguous >>"$G3_CLEANUP_FILE"
 		return 1
@@ -1421,7 +1438,8 @@ else
 	exit 1
 fi
 
-if g3_remove remove-disabled && g3_assert_marker && \
+if g3_remove remove-disabled && g3_assert_disabled remove-disabled && \
+	[[ -z $(g3_daemon_pids) ]] && g3_assert_marker && \
 	g3_capture_database remove-disabled-v3 3 "$G3_DISABLED_INSTALLATION_ID" && \
 	[[ ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] && \
 	g3_capture_state after-disabled-remove && \
@@ -1564,7 +1582,9 @@ removed_live_start=$G3_LIVE_STARTTIME
 removed_live_boot=$G3_LIVE_BOOT_ID
 if g3_remove remove-live && \
 	g3_wait_recorded_process_gone "$removed_live_pid" "$removed_live_start" "$removed_live_boot" && \
-	[[ ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] && g3_assert_marker && \
+	[[ ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] && \
+	g3_assert_disabled remove-live && [[ -z $(g3_daemon_pids) ]] && \
+	g3_assert_marker && \
 	g3_capture_database remove-live-v3 3 "$G3_LIVE_INSTALLATION_ID" && \
 	g3_capture_state after-live-remove && \
 	g3_state_unchanged before-live-remove after-live-remove; then

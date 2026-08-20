@@ -484,8 +484,14 @@ jobs:
           [[ $(head -n 1 "$control_dir/postrm") == \
             '#!/data/data/com.termux/files/usr/bin/sh' ]]
           grep -Fq '[ "${1:-}" = remove ]' "$control_dir/prerm"
-          grep -Fq '/bin/sv-disable' "$control_dir/prerm"
-          grep -Fq '/bin/sv" down termux-stacksd' "$control_dir/prerm"
+          grep -Fq '/bin/sv" -w 20 down termux-stacksd' "$control_dir/prerm"
+          grep -Fq 'stop_rc=$?' "$control_dir/prerm"
+          grep -Fq "'fail: termux-stacksd: runsv not running'" "$control_dir/prerm"
+          grep -Fq 'elapsed=${elapsed%s}' "$control_dir/prerm"
+          grep -Fq 'stop_proven=1' "$control_dir/prerm"
+          grep -Fq 'previous_service_pid=${service_pid}' "$control_dir/prerm"
+          grep -Fq 'kill -0 "${observed_pid}"' "$control_dir/prerm"
+          grep -Fq '/bin/touch" "${down_file}" || exit 1' "$control_dir/prerm"
           grep -Fq '/var/service/termux-stacksd' "$control_dir/prerm"
           if grep -Fq 'rm -rf' "$control_dir/prerm"; then false; fi
           if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
