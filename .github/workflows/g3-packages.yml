@@ -405,6 +405,17 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           [[ ${SVDIR:-} == "$PRERM_TEST_ROOT/prefix/var/service" ]]
+          if ! { exec 9<.; } 2>/dev/null; then
+            printf '%s\n' 'fatal: unable to open current directory: access denied' >&2
+            exit 100
+          fi
+          exec 9<&-
+          observed_cwd=$(pwd -P 2>/dev/null) || observed_cwd=
+          if [[ $observed_cwd != "$PRERM_TEST_ROOT/prefix/var/service/termux-stacksd" ]]; then
+            printf '%s\n' 'fatal: unable to open current directory: access denied' >&2
+            exit 100
+          fi
+          printf 'sv cwd=%s\n' "$observed_cwd" >>"$PRERM_TEST_LOG"
           printf 'sv %s\n' "$*" >>"$PRERM_TEST_LOG"
           pid_file=$PRERM_TEST_ROOT/prefix/var/service/termux-stacksd/supervise/pid
           count_file=$PRERM_TEST_ROOT/status-count
@@ -416,7 +427,7 @@ jobs:
                 printf '%s\n' 'timeout: down: termux-stacksd'
                 exit 1
                 ;;
-              inactive)
+              inactive | inaccessible-cwd)
                 printf '%s\n' 'fail: termux-stacksd: runsv not running'
                 exit 1
                 ;;
@@ -452,7 +463,7 @@ jobs:
               fi
               printf '%s\n' 'down: termux-stacksd: 0s; run: log: (pid 4242) 1s'
               ;;
-            inactive)
+            inactive | inaccessible-cwd)
               printf '%s\n' 'fail: termux-stacksd: runsv not running'
               exit 1
               ;;
@@ -494,6 +505,45 @@ jobs:
             [[ -f $service_dir/down && ! -L $service_dir/down ]]
           }
 
+          : >"$results/wrong-cwd.commands"
+          wrong_cwd_rc=0
+          (
+            cd "$render_dir"
+            PRERM_TEST_ROOT=$test_root \
+              PRERM_TEST_LOG=$results/wrong-cwd.commands \
+              PRERM_SCENARIO=inaccessible-cwd \
+              PRERM_LIVE_PID=$$ \
+              "$prefix/bin/sv" -w 20 down termux-stacksd \
+              >"$results/wrong-cwd.stdout" 2>"$results/wrong-cwd.stderr"
+          ) || wrong_cwd_rc=$?
+          [[ $wrong_cwd_rc -eq 100 ]]
+          [[ ! -s $results/wrong-cwd.commands ]]
+          grep -Fxq 'fatal: unable to open current directory: access denied' \
+            "$results/wrong-cwd.stderr"
+
+          run_prerm_from_inaccessible_cwd() {
+            local scenario=inaccessible-cwd
+            local stale_cwd=$test_root/inaccessible-dpkg-cwd
+            local prerm_rc=0
+            reset_case "$scenario"
+            mkdir "$stale_cwd"
+            (
+              cd "$stale_cwd" || exit 90
+              chmod 000 "$stale_cwd" || exit 91
+              PRERM_TEST_ROOT=$test_root \
+                PRERM_TEST_LOG=$results/$scenario.commands \
+                PRERM_SCENARIO=$scenario \
+                PRERM_LIVE_PID=$$ \
+                dash "$prerm" remove >"$results/$scenario.stdout" \
+                  2>"$results/$scenario.stderr"
+            ) || prerm_rc=$?
+            chmod 0700 "$stale_cwd"
+            rmdir "$stale_cwd"
+            [[ $prerm_rc -eq 0 ]]
+            [[ ! -e $stale_cwd && ! -L $stale_cwd ]]
+            [[ -f $service_dir/down && ! -L $service_dir/down ]]
+          }
+
           run_prerm success false-negative
           [[ $(<"$test_root/status-count") == 2 ]]
           grep -Fq 'sv down rc=1: timeout: down: termux-stacksd' \
@@ -507,6 +557,13 @@ jobs:
           [[ $(<"$test_root/status-count") == 1 ]]
           grep -Fq 'sv status attempt 1/5 rc=1: fail: termux-stacksd: runsv not running' \
             "$results/inactive.stderr"
+
+          run_prerm_from_inaccessible_cwd
+          [[ $(<"$test_root/status-count") == 1 ]]
+          [[ $(grep -Fxc "sv cwd=$service_dir" \
+            "$results/inaccessible-cwd.commands") == 2 ]]
+          grep -Fq 'sv status attempt 1/5 rc=1: fail: termux-stacksd: runsv not running' \
+            "$results/inaccessible-cwd.stderr"
 
           run_prerm success logger-suffix
           [[ $(<"$test_root/status-count") == 1 ]]
@@ -555,6 +612,7 @@ jobs:
           printf '%s\n' \
             'false-negative=PASS' \
             'inactive=PASS' \
+            'inaccessible-cwd=PASS' \
             'logger-suffix=PASS' \
             'rc0-run=PASS' \
             'want-up=PASS' \
@@ -681,6 +739,8 @@ jobs:
           [[ $(head -n 1 "$control_dir/postrm") == \
             '#!/data/data/com.termux/files/usr/bin/sh' ]]
           grep -Fq '[ "${1:-}" = remove ]' "$control_dir/prerm"
+          grep -Fq 'cd "${service_dir}" || exit 1' "$control_dir/prerm"
+          [[ $(grep -Fc 'cd "${service_dir}" || exit 1' "$control_dir/prerm") -eq 1 ]]
           grep -Fq '/bin/sv" -w 20 down termux-stacksd' "$control_dir/prerm"
           grep -Fq 'stop_rc=$?' "$control_dir/prerm"
           grep -Fq 'stop_output=$(SVDIR=' "$control_dir/prerm"
@@ -697,6 +757,15 @@ jobs:
           grep -Fq '/bin/touch" "${down_file}" || exit 1' "$control_dir/prerm"
           grep -Fq '/bin/sleep" 1 || exit 1' "$control_dir/prerm"
           grep -Fq '/var/service/termux-stacksd' "$control_dir/prerm"
+          service_guard_line=$(grep -nF '[ -d "${service_dir}" ] && [ ! -L "${service_dir}" ] || exit 1' \
+            "$control_dir/prerm" | cut -d: -f1)
+          cwd_line=$(grep -nF 'cd "${service_dir}" || exit 1' "$control_dir/prerm" | cut -d: -f1)
+          touch_line=$(grep -nF '/bin/touch" "${down_file}" || exit 1' \
+            "$control_dir/prerm" | cut -d: -f1)
+          sv_line=$(grep -nF '/bin/sv" -w 20 down termux-stacksd' \
+            "$control_dir/prerm" | cut -d: -f1)
+          [[ $service_guard_line -lt $cwd_line && $cwd_line -lt $touch_line && \
+            $touch_line -lt $sv_line ]]
           if grep -Fq 'rm -rf' "$control_dir/prerm"; then false; fi
           if grep -Eq '/var/(lib|run)/termux-stacks|/var/log/(sv/)?termux-stacksd|/var/lib/proot-distro' \
             "$control_dir/prerm"; then false; fi

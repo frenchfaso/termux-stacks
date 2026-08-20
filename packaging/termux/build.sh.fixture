@@ -32,6 +32,7 @@ termux_step_create_debscripts() {
 			service_dir="${TERMUX_PREFIX}/var/service/termux-stacksd"
 			if [ -e "\${service_dir}" ] || [ -L "\${service_dir}" ]; then
 				[ -d "\${service_dir}" ] && [ ! -L "\${service_dir}" ] || exit 1
+				cd "\${service_dir}" || exit 1
 				down_file="\${service_dir}/down"
 				if [ -e "\${down_file}" ] || [ -L "\${down_file}" ]; then
 					[ -f "\${down_file}" ] && [ ! -L "\${down_file}" ] || exit 1

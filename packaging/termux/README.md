@@ -11,9 +11,15 @@ SQLite strategy is dynamic linking against the packaged `libsqlite`. The
 engine dependency is pinned to `proot-distro 5.6.0` because the runtime
 capability probe accepts exactly that qualified version.
 
-The fixture's `prerm` acts only on an actual package removal. It creates the
-fixed service's `down` file, records the supervised PID around an absolute,
-bounded `sv down`, and then performs up to five bounded status observations.
+The fixture's `prerm` acts only on an actual package removal. After validating
+the fixed service as a real, non-symlink directory, it changes into that
+directory or aborts. This gives every absolute Termux command an accessible
+working directory even when Android starts the package hook from a directory
+that the Termux app cannot open. `sv` opens `.` before changing to `SVDIR`, so
+absolute executable and service paths alone are insufficient. The hook then
+creates the fixed service's `down` file, records the supervised PID around an
+absolute, bounded `sv down`, and performs up to five bounded status
+observations.
 It does not trust the stop command's exit code by itself. A removal can
 proceed only after an exact terminal `down` or inactive-supervisor status and
 a final recheck prove every recorded PID dead. Transient status-command

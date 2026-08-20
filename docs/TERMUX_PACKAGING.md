@@ -163,16 +163,20 @@ scripts do not run it.
 Removal is distinct from upgrade. The package-candidate `prerm`, only during
 actual removal:
 
-1. creates the fixed `down` file and requests a bounded, exact `sv down`;
-2. records the stop result, then performs up to five bounded supervisor-status
+1. validates the fixed service as a real, non-symlink directory and changes
+   into it, aborting if the change fails; this replaces Android's potentially
+   inaccessible package-hook working directory before any Termux executable
+   starts;
+2. creates the fixed `down` file and requests a bounded, exact `sv down`;
+3. records the stop result, then performs up to five bounded supervisor-status
    observations instead of trusting the stop exit code alone;
-3. on Debian, proceeds only after an exact terminal `down` or
+4. on Debian, proceeds only after an exact terminal `down` or
    inactive-supervisor result and final rechecks prove every observed PID
    dead;
-4. preserves every stop/status result in package-manager output so a failed
+5. preserves every stop/status result in package-manager output so a failed
    proof remains actionable;
-5. prevents runit from retrying an executable that has been removed;
-6. does not delete the database, volumes, logs, or rootfs.
+6. prevents runit from retrying an executable that has been removed;
+7. does not delete the database, volumes, logs, or rootfs.
 
 The G3 package-candidate gate qualifies the Debian lifecycle, including an
 enabled service, a disabled service, and upgrade. Pacman/libalpm executes the

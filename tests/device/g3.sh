@@ -9,7 +9,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEVICE_PHASE=G3
 DEVICE_RUN_LABEL=termux-stacks-g3
 DEVICE_RUNTIME_LABEL=txs-g3
-DEVICE_HARNESS_VERSION=5
+DEVICE_HARNESS_VERSION=6
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised only the two explicitly supplied local termux-stacks\npackages and the fixed termux-stacksd service. It required an absent package,\nservice and runtime plus an absent or empty state baseline, used one owned\nmarker, and restored that exact baseline. Only after both ordinary-removal and\nreinstall proofs did it purge that exact package to clear Debian conffiles. It\nnever removed unknown state or targeted an unqualified process.'
 
 # shellcheck source=tests/device/lib.sh
@@ -731,6 +731,8 @@ g3_static_package() {
 		[[ $(head -n 1 "$control/prerm") == "#!$G3_PREFIX/bin/sh" ]] || package_ok=0
 		"$G3_PREFIX/bin/sh" -n "$control/prerm" || package_ok=0
 		grep -Fq '[ "${1:-}" = remove ]' "$control/prerm" || package_ok=0
+		grep -Fq 'cd "${service_dir}" || exit 1' "$control/prerm" || package_ok=0
+		[[ $(grep -Fc 'cd "${service_dir}" || exit 1' "$control/prerm") -eq 1 ]] || package_ok=0
 		grep -Fq "$G3_PREFIX/bin/sv\" -w 20 down termux-stacksd" \
 			"$control/prerm" || package_ok=0
 		grep -Fq 'stop_rc=$?' "$control/prerm" || package_ok=0
