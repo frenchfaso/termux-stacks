@@ -531,8 +531,11 @@ The harness never updates indexes, installs a dependency, repairs unrelated
 package state, or falls back to a raw `dpkg` mutation. Each real APT effect is
 also bracketed by a sorted inventory of the complete dpkg database; removing
 the exact `termux-stacks` row must leave those inventories byte-identical.
-Local installs additionally use `--no-download`. Any unrelated package change
-fails the gate and stops further lifecycle effects.
+The absolute local artifact is the only install target. Any unrelated package
+change fails the gate and stops further lifecycle effects. The harness does
+not pass `--no-download`: Termux APT 2.8.1 aborts through Android fdsan on that
+local-package path, while the simulated plan and full dpkg inventory delta
+retain the intended fail-closed scope.
 
 Ordinary `apt-get remove` intentionally exercises Debian conffile behavior: it
 must leave `deinstall ok config-files` and the fixed disabled service skeleton,

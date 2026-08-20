@@ -9,7 +9,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEVICE_PHASE=G3
 DEVICE_RUN_LABEL=termux-stacks-g3
 DEVICE_RUNTIME_LABEL=txs-g3
-DEVICE_HARNESS_VERSION=1
+DEVICE_HARNESS_VERSION=2
 DEVICE_AUTOMATIC_SCOPE=$'The harness exercised only the two explicitly supplied local termux-stacks\npackages and the fixed termux-stacksd service. It required an absent package,\nservice and runtime plus an absent or empty state baseline, used one owned\nmarker, and restored that exact baseline. Only after both ordinary-removal and\nreinstall proofs did it purge that exact package to clear Debian conffiles. It\nnever removed unknown state or targeted an unqualified process.'
 
 # shellcheck source=tests/device/lib.sh
@@ -364,7 +364,9 @@ g3_create_marker() {
 }
 
 g3_capture_state() {
-	local label=$1 output=$G3_PACKAGES_DIR/$label.state.tsv path relative kind hash
+	local label=$1
+	local output=$G3_PACKAGES_DIR/$label.state.tsv
+	local path relative kind hash
 	printf 'path\ttype\tsha256\n' >"$output"
 	[[ -d $G3_STATE_DIR && ! -L $G3_STATE_DIR ]] || return 1
 	while IFS= read -r -d '' path; do
@@ -689,7 +691,9 @@ g3_assert_installed() {
 }
 
 g3_assert_disabled() {
-	local label=$1 status_file=$G3_PACKAGES_DIR/$label.service-status pid pids iteration
+	local label=$1
+	local status_file=$G3_PACKAGES_DIR/$label.service-status
+	local pid pids iteration
 	[[ -f $G3_SERVICE_DIR/down && ! -L $G3_SERVICE_DIR/down ]] || return 1
 	[[ ! -e $G3_SOCKET && ! -L $G3_SOCKET ]] || return 1
 	for ((iteration = 0; iteration < 50; iteration += 1)); do
@@ -769,7 +773,8 @@ g3_verify_package_files() {
 }
 
 g3_capture_package_database() {
-	local label=$1 output=$G3_PACKAGES_DIR/$label.dpkg.tsv
+	local label=$1
+	local output=$G3_PACKAGES_DIR/$label.dpkg.tsv
 	LC_ALL=C dpkg-query -W \
 		'-f=${binary:Package}\t${db:Status-Abbrev}\t${Version}\t${Architecture}\n' \
 		2>"$output.stderr" | LC_ALL=C sort >"$output"
@@ -829,8 +834,11 @@ g3_install() {
 	g3_intent apt-install "termux-stacks@$version binary_sha256=$sha" || return 1
 	g3_abort_if_signalled
 	G3_MUTATION_STARTED=1
+	# Termux APT 2.8.1 aborts through Android fdsan when --no-download is used
+	# for this local-package path. The simulated plan and complete dpkg database
+	# snapshots remain the fail-closed scope guards.
 	device_capture "$label.apt" apt-get --assume-yes --no-install-recommends \
-		--no-remove --no-download --allow-downgrades install "$deb"
+		--no-remove --allow-downgrades install "$deb"
 	effect_rc=$DEVICE_CAPTURE_RC
 	g3_capture_package_database "$label.after" || return 1
 	g3_assert_only_target_package_changed "$label.before" "$label.after" || return 1
@@ -1146,6 +1154,8 @@ device_metadata architecture "$G3_DEVICE_ARCH"
 device_metadata uname "$(uname -a 2>/dev/null || printf unavailable)"
 device_metadata android_release "$(getprop ro.build.version.release 2>/dev/null || printf unavailable)"
 device_metadata android_sdk "$(getprop ro.build.version.sdk 2>/dev/null || printf unavailable)"
+device_metadata apt_version "$(apt-get --version | sed -n '1p')"
+device_metadata dpkg_version "$(dpkg-query -W '-f=${Version}' dpkg 2>/dev/null || printf unavailable)"
 device_metadata acknowledgement accept-package-manager-changes
 device_metadata state_baseline "$G3_STATE_BASELINE"
 device_metadata old_source_commit "$G3_BLESSED_OLD_SOURCE"
